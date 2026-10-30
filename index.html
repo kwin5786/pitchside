@@ -127,6 +127,8 @@
   .launch-foot { width: 100%; height: 48px; font-size: 12px; letter-spacing: 0.06em; }
   body[data-role="viewer"] .scorer-only { display: none; }
   body[data-role="scorer"] .viewer-only { display: none; }
+  .seg { flex-wrap: wrap; }
+  .seg-sizes .toggle { flex: 1; min-width: 52px; padding: 0 8px; }
 
   .panel {
     background: var(--panel);
@@ -410,6 +412,49 @@
       <div class="panel-foot" id="teamsStatus">Loading teams…</div>
     </section>
     </section>
+
+    <section class="screen" id="screenMatchSetup" hidden>
+      <div class="panel">
+        <h2>New match</h2>
+
+        <div class="field-label">Teams</div>
+        <div class="player-list">
+          <button type="button" class="player-row" id="pickTeamA"></button>
+          <button type="button" class="player-row" id="pickTeamB"></button>
+        </div>
+
+        <div class="field-label">Match type</div>
+        <div class="seg seg-sizes" id="matchType">
+          <button type="button" class="toggle" data-size="5" aria-pressed="false">5</button>
+          <button type="button" class="toggle" data-size="6" aria-pressed="false">6</button>
+          <button type="button" class="toggle" data-size="7" aria-pressed="false">7</button>
+          <button type="button" class="toggle" data-size="9" aria-pressed="false">9</button>
+          <button type="button" class="toggle" data-size="11" aria-pressed="false">11</button>
+        </div>
+
+        <div class="field-label">Periods (minutes)</div>
+        <div class="seg">
+          <label style="flex:1">
+            <span class="field-label" style="margin-top:0">First half</span>
+            <input class="text-input" id="firstHalf" type="number" min="1" max="60" value="15" inputmode="numeric">
+          </label>
+          <label style="flex:1">
+            <span class="field-label" style="margin-top:0">Break</span>
+            <input class="text-input" id="breakMins" type="number" min="0" max="30" value="5" inputmode="numeric">
+          </label>
+          <label style="flex:1">
+            <span class="field-label" style="margin-top:0">Second half</span>
+            <input class="text-input" id="secondHalf" type="number" min="1" max="60" value="15" inputmode="numeric">
+          </label>
+        </div>
+
+        <div class="field-label">Kick-off</div>
+        <div class="seg" id="kickoffPick"></div>
+
+        <div class="form-msg" id="matchMsg" aria-live="polite"></div>
+        <button type="button" id="createMatchBtn" class="primary" style="width:100%" disabled>Create match</button>
+      </div>
+    </section>
   </main>
 </div>
 
@@ -487,6 +532,17 @@
   </div>
 </div>
 
+<!-- Team picker -->
+<div class="overlay" id="teamPickOverlay" role="dialog" aria-modal="true" aria-labelledby="teamPickTitle">
+  <div class="modal" style="max-width:420px">
+    <h3 id="teamPickTitle">Choose team</h3>
+    <div class="squad-picker" id="teamPickList"></div>
+    <div class="modal-actions">
+      <button type="button" id="teamPickCancel">Cancel</button>
+    </div>
+  </div>
+</div>
+
 <!-- Generic confirm -->
 <div class="overlay" id="confirmOverlay" role="dialog" aria-modal="true" aria-labelledby="confirmTitle">
   <div class="modal" style="max-width:420px">
@@ -535,6 +591,7 @@
     if (!isScorer) closePlayerPanel();
     renderPlayers();
     if (!isScorer) closeTeamPanel();
+    if (!isScorer && currentScreen !== 'launch') showScreen('launch');
     renderTeams();
   }
 
@@ -615,6 +672,10 @@
   document.addEventListener('keydown', (e) => {
     if ($('confirmOverlay').classList.contains('open')) {
       if (e.key === 'Escape') closeConfirm();
+      return;
+    }
+    if ($('teamPickOverlay').classList.contains('open')) {
+      if (e.key === 'Escape') closeTeamPick();
       return;
     }
     if ($('teamOverlay').classList.contains('open')) {
@@ -1215,8 +1276,163 @@
   $('teamDelete').addEventListener('click', confirmDeleteTeam);
   $('teamOverlay').addEventListener('click', (e) => { if (e.target === e.currentTarget) closeTeamPanel(); });
 
+  // ---------- Match setup ----------
+  const matchSetup = { teamA: null, teamB: null, size: 6, kickoff: null, busy: false, picking: null };
+
+  function openMatchSetup() {
+    matchSetup.teamA = null;
+    matchSetup.teamB = null;
+    matchSetup.size = 6;
+    matchSetup.kickoff = null;
+    matchSetup.busy = false;
+    matchSetup.picking = null;
+    $('matchMsg').textContent = '';
+    $('firstHalf').value = 15;
+    $('breakMins').value = 5;
+    $('secondHalf').value = 15;
+    renderMatchSetup();
+    showScreen('matchSetup');
+  }
+
+  function teamLabel(team) {
+    const dot = document.createElement('span');
+    dot.className = 'colour-dot';
+    dot.style.background = team.colour;
+
+    const name = document.createElement('span');
+    name.className = 'player-name';
+    name.textContent = team.name;
+    return [dot, name];
+  }
+
+  function renderMatchSetup() {
+    for (const slot of ['A', 'B']) {
+      const btn = $('pickTeam' + slot);
+      const team = matchSetup['team' + slot];
+      btn.replaceChildren();
+      if (team) {
+        btn.append(...teamLabel(team));
+      } else {
+        const hint = document.createElement('span');
+        hint.style.color = 'var(--muted)';
+        hint.textContent = 'Choose team ' + slot;
+        btn.append(hint);
+      }
+    }
+
+    for (const btn of $('matchType').children) {
+      btn.setAttribute('aria-pressed', String(Number(btn.dataset.size) === matchSetup.size));
+    }
+
+    const kickoff = $('kickoffPick');
+    kickoff.replaceChildren();
+    if (matchSetup.teamA && matchSetup.teamB) {
+      if (matchSetup.kickoff === null) matchSetup.kickoff = matchSetup.teamA.id;
+      for (const team of [matchSetup.teamA, matchSetup.teamB]) {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'toggle';
+        btn.textContent = team.name;
+        btn.setAttribute('aria-pressed', String(matchSetup.kickoff === team.id));
+        btn.addEventListener('click', () => {
+          matchSetup.kickoff = team.id;
+          renderMatchSetup();
+        });
+        kickoff.append(btn);
+      }
+    }
+
+    const ready = matchSetup.teamA && matchSetup.teamB && matchSetup.teamA.id !== matchSetup.teamB.id;
+    $('createMatchBtn').disabled = !ready || matchSetup.busy;
+  }
+
+  function openTeamPick(slot) {
+    matchSetup.picking = slot;
+    const other = slot === 'A' ? matchSetup.teamB : matchSetup.teamA;
+    const list = $('teamPickList');
+    list.replaceChildren();
+    for (const team of teams) {
+      if (other && team.id === other.id) continue;
+      const row = document.createElement('button');
+      row.type = 'button';
+      row.className = 'player-row';
+      row.append(...teamLabel(team));
+      row.addEventListener('click', () => {
+        matchSetup['team' + slot] = team;
+        const ids = [matchSetup.teamA && matchSetup.teamA.id, matchSetup.teamB && matchSetup.teamB.id];
+        if (!ids.includes(matchSetup.kickoff)) matchSetup.kickoff = null;
+        closeTeamPick();
+        renderMatchSetup();
+      });
+      list.append(row);
+    }
+    if (!list.children.length) {
+      const empty = document.createElement('div');
+      empty.className = 'empty';
+      empty.textContent = 'No teams yet — add one from Teams';
+      list.append(empty);
+    }
+    $('teamPickOverlay').classList.add('open');
+  }
+
+  function closeTeamPick() {
+    $('teamPickOverlay').classList.remove('open');
+    matchSetup.picking = null;
+  }
+
+  function readMinutes(id, fallback) {
+    const input = $(id);
+    const n = parseInt(input.value, 10);
+    return Number.isNaN(n) || n < Number(input.min) ? fallback : n;
+  }
+
+  async function createMatch() {
+    if (state.role !== 'scorer') return;
+    if (matchSetup.busy) return;
+    const firstHalf = readMinutes('firstHalf', 15) * 60;
+    const breakSecs = readMinutes('breakMins', 5) * 60;
+    const secondHalf = readMinutes('secondHalf', 15) * 60;
+
+    matchSetup.busy = true;
+    renderMatchSetup();
+    try {
+      const { error } = await getClient().from('matches')
+        .insert({
+          team_a_id: matchSetup.teamA.id,
+          team_b_id: matchSetup.teamB.id,
+          match_type: Number(matchSetup.size),
+          first_half_secs: firstHalf,
+          break_secs: breakSecs,
+          second_half_secs: secondHalf,
+          kickoff_team_id: matchSetup.kickoff || matchSetup.teamA.id,
+          status: 'setup'
+        })
+        .select('id')
+        .single();
+      if (error) throw error;
+      showScreen('launch');
+    } catch (err) {
+      $('matchMsg').textContent = describeError(err);
+      matchSetup.busy = false;
+      renderMatchSetup();
+      console.error('Pitchside match create failed:', err);
+    }
+  }
+
+  $('pickTeamA').addEventListener('click', () => openTeamPick('A'));
+  $('pickTeamB').addEventListener('click', () => openTeamPick('B'));
+  $('teamPickCancel').addEventListener('click', closeTeamPick);
+  $('teamPickOverlay').addEventListener('click', (e) => { if (e.target === e.currentTarget) closeTeamPick(); });
+  $('matchType').addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-size]');
+    if (!btn) return;
+    matchSetup.size = Number(btn.dataset.size);
+    renderMatchSetup();
+  });
+  $('createMatchBtn').addEventListener('click', createMatch);
+
   // ---------- Screen router ----------
-  const SCREENS = { launch: 'screenLaunch', players: 'screenPlayers', teams: 'screenTeams' };
+  const SCREENS = { launch: 'screenLaunch', players: 'screenPlayers', teams: 'screenTeams', matchSetup: 'screenMatchSetup' };
   let currentScreen = 'launch';
 
   function showScreen(name) {
@@ -1231,6 +1447,8 @@
   $('backBtn').addEventListener('click', () => showScreen('launch'));
   $('tileTeams').addEventListener('click', () => showScreen('teams'));
   $('tileSetup').addEventListener('click', () => showScreen('players'));
+  $('startMatchBtn').disabled = false;
+  $('startMatchBtn').addEventListener('click', openMatchSetup);
 
   // ---------- Init ----------
   showScreen('launch');
