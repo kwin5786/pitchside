@@ -130,6 +130,18 @@
   .seg { flex-wrap: wrap; }
   .seg-sizes .toggle { flex: 1; min-width: 52px; padding: 0 8px; }
   .empty.error { color: var(--amber); }
+  .match-card {
+    background: var(--panel); border: 1px solid var(--green); border-radius: 14px;
+    padding: 16px; display: flex; flex-direction: column; gap: 12px; width: 100%;
+    text-align: left;
+  }
+  .match-card-head {
+    display: flex; align-items: center; gap: 7px;
+    font-size: 10px; font-weight: 700; letter-spacing: 0.12em; color: var(--green);
+  }
+  .match-card-teams { display: flex; align-items: center; gap: 12px; }
+  .match-card-meta { margin-left: auto; font-size: 11px; color: var(--muted); }
+  #currentMatch:empty { display: none; }
 
   .panel {
     background: var(--panel);
@@ -373,7 +385,7 @@
       <div class="launch">
         <button type="button" class="hero scorer-only" id="startMatchBtn" disabled>START A MATCH</button>
 
-        <div class="no-match viewer-only">
+        <div class="no-match viewer-only" id="noMatchBox">
           <strong>No match right now</strong>
           <span>When a match kicks off, the score and clock will appear here.</span>
         </div>
@@ -383,6 +395,8 @@
           <button type="button" class="tile" id="tileTournament" disabled>TOURNAMENT</button>
           <button type="button" class="tile" id="tileSetup">SETUP</button>
         </div>
+
+        <div id="currentMatch"></div>
 
         <div class="section-label">RECENT RESULTS</div>
         <div class="player-list" id="recentResults"><div class="empty">Loading matches…</div></div>
@@ -1452,18 +1466,60 @@
   }
 
   function renderMatches() {
+    const current = matches.filter((m) => m.status !== 'finished' && m.status !== 'abandoned');
+    const finished = matches.filter((m) => m.status === 'finished' || m.status === 'abandoned');
+
+    const currentMatch = current[0] || null;
+    $('noMatchBox').hidden = !!currentMatch;
+
+    const card = $('currentMatch');
+    card.replaceChildren();
+    if (currentMatch) {
+      const m = currentMatch;
+      const teamA = teamById(m.team_a_id);
+      const teamB = teamById(m.team_b_id);
+
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'match-card';
+      btn.disabled = true;
+
+      const head = document.createElement('div');
+      head.className = 'match-card-head';
+      head.textContent = m.status === 'setup' ? 'UP NEXT' : 'LIVE NOW';
+
+      const teamsRow = document.createElement('div');
+      teamsRow.className = 'match-card-teams';
+
+      const dot = document.createElement('span');
+      dot.className = 'colour-dot';
+      if (teamA) dot.style.background = teamA.colour;
+
+      const name = document.createElement('span');
+      name.className = 'player-name';
+      name.textContent = `${teamA ? teamA.name : 'Unknown team'} v ${teamB ? teamB.name : 'Unknown team'}`;
+
+      const meta = document.createElement('span');
+      meta.className = 'match-card-meta';
+      meta.textContent = `${m.match_type}-a-side`;
+
+      teamsRow.append(dot, name, meta);
+      btn.append(head, teamsRow);
+      card.append(btn);
+    }
+
     const list = $('recentResults');
     list.replaceChildren();
 
-    if (!matches.length) {
+    if (!finished.length) {
       const empty = document.createElement('div');
       empty.className = 'empty';
-      empty.textContent = 'No matches yet';
+      empty.textContent = 'No finished matches yet';
       list.append(empty);
       return;
     }
 
-    for (const m of matches) {
+    for (const m of finished) {
       const teamA = teamById(m.team_a_id);
       const teamB = teamById(m.team_b_id);
 
@@ -1480,7 +1536,9 @@
 
       const status = document.createElement('span');
       status.style.cssText = 'margin-left:auto; color:var(--muted); font-size:13px;';
-      status.textContent = m.status === 'setup' ? 'Not started' : m.status;
+      status.textContent = m.status === 'finished' ? 'Full time'
+        : m.status === 'abandoned' ? 'Abandoned'
+        : String(m.status || '').charAt(0).toUpperCase() + String(m.status || '').slice(1);
 
       row.append(dot, name, status);
       list.append(row);
