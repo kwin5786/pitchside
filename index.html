@@ -129,6 +129,7 @@
   body[data-role="scorer"] .viewer-only { display: none; }
   .seg { flex-wrap: wrap; }
   .seg-sizes .toggle { flex: 1; min-width: 52px; padding: 0 8px; }
+  .empty.error { color: var(--amber); }
 
   .panel {
     background: var(--panel);
@@ -384,7 +385,7 @@
         </div>
 
         <div class="section-label">RECENT RESULTS</div>
-        <div class="empty" id="recentResults">No matches yet</div>
+        <div class="player-list" id="recentResults"><div class="empty">Loading matches…</div></div>
 
         <button id="signInBtn" type="button" class="launch-foot">Scorer sign in</button>
         <button id="signOutBtn" type="button" class="launch-foot" hidden>Sign out</button>
@@ -997,6 +998,7 @@
       }));
       teamsLoaded = true;
       renderTeams();
+      if (matchesLoaded) renderMatches();
     } catch (err) {
       setTeamsStatus(describeError(err), true);
       console.error('Pitchside team load failed:', err);
@@ -1410,12 +1412,78 @@
         .select('id')
         .single();
       if (error) throw error;
+      await loadMatches();
       showScreen('launch');
     } catch (err) {
       $('matchMsg').textContent = describeError(err);
       matchSetup.busy = false;
       renderMatchSetup();
       console.error('Pitchside match create failed:', err);
+    }
+  }
+
+  let matches = [];
+  let matchesLoaded = false;
+
+  async function loadMatches() {
+    try {
+      const { data, error } = await getClient()
+        .from('matches')
+        .select('id, status, match_type, team_a_id, team_b_id, created_at')
+        .order('created_at', { ascending: false })
+        .limit(10);
+      if (error) throw error;
+      matches = data || [];
+      matchesLoaded = true;
+      renderMatches();
+    } catch (err) {
+      const list = $('recentResults');
+      list.replaceChildren();
+      const msg = document.createElement('div');
+      msg.className = 'empty error';
+      msg.textContent = describeError(err);
+      list.append(msg);
+      console.error('Pitchside match load failed:', err);
+    }
+  }
+
+  function teamById(id) {
+    return teams.find((t) => t.id === id) || null;
+  }
+
+  function renderMatches() {
+    const list = $('recentResults');
+    list.replaceChildren();
+
+    if (!matches.length) {
+      const empty = document.createElement('div');
+      empty.className = 'empty';
+      empty.textContent = 'No matches yet';
+      list.append(empty);
+      return;
+    }
+
+    for (const m of matches) {
+      const teamA = teamById(m.team_a_id);
+      const teamB = teamById(m.team_b_id);
+
+      const row = document.createElement('div');
+      row.className = 'player-row';
+
+      const dot = document.createElement('span');
+      dot.className = 'colour-dot';
+      if (teamA) dot.style.background = teamA.colour;
+
+      const name = document.createElement('span');
+      name.className = 'player-name';
+      name.textContent = `${teamA ? teamA.name : 'Unknown team'} v ${teamB ? teamB.name : 'Unknown team'}`;
+
+      const status = document.createElement('span');
+      status.style.cssText = 'margin-left:auto; color:var(--muted); font-size:13px;';
+      status.textContent = m.status === 'setup' ? 'Not started' : m.status;
+
+      row.append(dot, name, status);
+      list.append(row);
     }
   }
 
@@ -1455,6 +1523,7 @@
   renderRole();
   loadPlayers();
   loadTeams();
+  loadMatches();
 </script>
 </body>
 </html>
