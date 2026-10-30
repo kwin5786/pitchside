@@ -143,6 +143,21 @@
   .match-card-meta { margin-left: auto; font-size: 11px; color: var(--muted); }
   #currentMatch:empty { display: none; }
 
+  /* ---------- Line-up ---------- */
+  .lineup-team { margin-bottom: 18px; }
+  .lineup-team-head {
+    display: flex; align-items: center; gap: 10px;
+    padding-bottom: 8px; border-bottom: 1px solid var(--border);
+  }
+  .lineup-team-head .player-name { font-weight: 600; }
+  .lineup-count { margin-left: auto; font-size: 13px; color: var(--muted); }
+  .lineup-count.over { color: var(--amber); }
+  .keeper-btn {
+    flex: none; margin-left: auto; min-height: 32px; min-width: 32px;
+    padding: 0 10px; font-size: 11px; font-weight: 700; border-radius: 999px;
+  }
+  .keeper-btn[aria-pressed="true"] { background: var(--amber); border-color: var(--amber); color: #141413; }
+
   .panel {
     background: var(--panel);
     border: 1px solid var(--border);
@@ -468,6 +483,18 @@
 
         <div class="form-msg" id="matchMsg" aria-live="polite"></div>
         <button type="button" id="createMatchBtn" class="primary" style="width:100%" disabled>Create match</button>
+      </div>
+    </section>
+
+    <section class="screen" id="screenLineup" hidden>
+      <div class="panel">
+        <div class="panel-head">
+          <h2 id="lineupTitle">Line-up</h2>
+        </div>
+        <div id="lineupTeams"></div>
+        <div class="form-msg" id="lineupMsg" aria-live="polite"></div>
+        <button type="button" id="saveLineupBtn" class="primary" style="width:100%" disabled>Save line-up</button>
+        <div class="panel-foot" id="lineupStatus"></div>
       </div>
     </section>
   </main>
@@ -1482,11 +1509,17 @@
       const btn = document.createElement('button');
       btn.type = 'button';
       btn.className = 'match-card';
-      btn.disabled = true;
+      if (state.role === 'scorer') {
+        btn.addEventListener('click', () => openLineup(m));
+      } else {
+        btn.disabled = true;
+      }
 
       const head = document.createElement('div');
       head.className = 'match-card-head';
-      head.textContent = m.status === 'setup' ? 'UP NEXT' : 'LIVE NOW';
+      head.textContent = m.status === 'setup' ? 'UP NEXT'
+        : m.status === 'ready' ? 'READY'
+        : 'LIVE NOW';
 
       const teamsRow = document.createElement('div');
       teamsRow.className = 'match-card-teams';
@@ -1557,8 +1590,210 @@
   });
   $('createMatchBtn').addEventListener('click', createMatch);
 
+  // ---------- Line-up ----------
+  const lineup = { match: null, picked: new Set(), keepers: {}, busy: false };
+  // picked holds player ids starting on pitch; keepers maps team_id -> player id
+
+  async function openLineup(match) {
+    if (state.role !== 'scorer') return;
+    lineup.match = match;
+    lineup.busy = false;
+    lineup.picked = new Set();
+    lineup.keepers = {};
+    $('lineupMsg').textContent = '';
+    $('lineupStatus').textContent = '';
+    $('lineupStatus').className = 'panel-foot';
+
+    try {
+      const { data, error } = await getClient()
+        .from('match_players')
+        .select('player_id, team_id, on_pitch, is_keeper')
+        .eq('match_id', match.id);
+      if (error) throw error;
+      for (const row of data || []) {
+        if (row.on_pitch) lineup.picked.add(row.player_id);
+        if (row.is_keeper) lineup.keepers[row.team_id] = row.player_id;
+      }
+    } catch (err) {
+      $('lineupStatus').textContent = describeError(err);
+      $('lineupStatus').className = 'panel-foot error';
+      console.error('Pitchside line-up load failed:', err);
+    }
+
+    renderLineup();
+    showScreen('lineup');
+  }
+
+  function squadOf(teamId) {
+    const team = teamById(teamId);
+    if (!team) return [];
+    return team.memberIds
+      .map((id) => players.find((p) => p.id === id))
+      .filter(Boolean)
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  function renderLineup() {
+    const m = lineup.match;
+    const size = Number(m.match_type);
+    const sides = [m.team_a_id, m.team_b_id].map((id) => {
+      const team = teamById(id);
+      return { id, name: team ? team.name : 'Unknown team', colour: team ? team.colour : '', squad: squadOf(id) };
+    });
+
+    $('lineupTitle').textContent = `${sides[0].name} v ${sides[1].name}`;
+
+    const container = $('lineupTeams');
+    container.replaceChildren();
+    const warnings = { count: [], keeper: [], female: [] };
+
+    for (const side of sides) {
+      const onPitch = side.squad.filter((p) => lineup.picked.has(p.id));
+      const n = onPitch.length;
+
+      const block = document.createElement('div');
+      block.className = 'lineup-team';
+
+      const head = document.createElement('div');
+      head.className = 'lineup-team-head';
+
+      const dot = document.createElement('span');
+      dot.className = 'colour-dot';
+      dot.style.background = side.colour;
+
+      const name = document.createElement('span');
+      name.className = 'player-name';
+      name.textContent = side.name;
+
+      const count = document.createElement('span');
+      count.className = 'lineup-count' + (n !== size ? ' over' : '');
+      count.textContent = `${n} of ${size} on pitch`;
+
+      head.append(dot, name, count);
+      block.append(head);
+
+      const list = document.createElement('div');
+      list.className = 'player-list';
+
+      for (const p of side.squad) {
+        const row = document.createElement('button');
+        row.type = 'button';
+        row.className = 'player-row squad-row';
+        row.setAttribute('aria-pressed', String(lineup.picked.has(p.id)));
+
+        const badge = document.createElement('span');
+        badge.className = 'initials';
+        badge.textContent = initials(p.name);
+
+        const pname = document.createElement('span');
+        pname.className = 'player-name';
+        pname.textContent = p.name;
+
+        row.append(badge, pname);
+        if (p.gender === 'F') {
+          const tag = document.createElement('span');
+          tag.className = 'f-tag';
+          tag.textContent = 'F';
+          row.append(tag);
+        }
+
+        const gk = document.createElement('button');
+        gk.type = 'button';
+        gk.className = 'keeper-btn';
+        gk.textContent = 'GK';
+        gk.setAttribute('aria-pressed', String(lineup.keepers[side.id] === p.id));
+        gk.addEventListener('click', (e) => {
+          e.stopPropagation();
+          if (lineup.keepers[side.id] === p.id) {
+            delete lineup.keepers[side.id];
+          } else {
+            lineup.keepers[side.id] = p.id;
+            lineup.picked.add(p.id);
+          }
+          renderLineup();
+        });
+        row.append(gk);
+
+        row.addEventListener('click', () => {
+          if (lineup.picked.has(p.id)) {
+            lineup.picked.delete(p.id);
+            if (lineup.keepers[side.id] === p.id) delete lineup.keepers[side.id];
+          } else {
+            lineup.picked.add(p.id);
+          }
+          renderLineup();
+        });
+        list.append(row);
+      }
+
+      if (!side.squad.length) {
+        const empty = document.createElement('div');
+        empty.className = 'empty';
+        empty.textContent = 'No players in this squad';
+        list.append(empty);
+      }
+
+      block.append(list);
+      container.append(block);
+
+      if (n !== size) warnings.count.push(`${side.name}: ${n} of ${size}`);
+      if (!lineup.keepers[side.id]) warnings.keeper.push(`${side.name}: no keeper`);
+      if (!onPitch.some((p) => p.gender === 'F')) warnings.female.push(`${side.name}: no female player`);
+    }
+
+    $('lineupMsg').textContent = [...warnings.count, ...warnings.keeper, ...warnings.female].join(' · ');
+    $('saveLineupBtn').disabled = lineup.busy || lineup.picked.size === 0;
+  }
+
+  async function saveLineup() {
+    if (state.role !== 'scorer') return;
+    if (lineup.busy) return;
+    const m = lineup.match;
+
+    lineup.busy = true;
+    renderLineup();
+    try {
+      const { error: delError } = await getClient()
+        .from('match_players')
+        .delete()
+        .eq('match_id', m.id);
+      if (delError) throw delError;
+
+      const rows = [];
+      for (const teamId of [m.team_a_id, m.team_b_id]) {
+        for (const p of squadOf(teamId)) {
+          rows.push({
+            match_id: m.id,
+            player_id: p.id,
+            team_id: teamId,
+            on_pitch: lineup.picked.has(p.id),
+            is_keeper: lineup.keepers[teamId] === p.id
+          });
+        }
+      }
+      const { error: insError } = await getClient().from('match_players').insert(rows);
+      if (insError) throw insError;
+
+      const { error: updError } = await getClient()
+        .from('matches')
+        .update({ status: 'ready' })
+        .eq('id', m.id);
+      if (updError) throw updError;
+
+      await loadMatches();
+      showScreen('launch');
+    } catch (err) {
+      lineup.busy = false;
+      renderLineup();
+      $('lineupMsg').textContent = describeError(err);
+      console.error('Pitchside line-up save failed:', err);
+    }
+  }
+
+  $('saveLineupBtn').addEventListener('click', saveLineup);
+
   // ---------- Screen router ----------
-  const SCREENS = { launch: 'screenLaunch', players: 'screenPlayers', teams: 'screenTeams', matchSetup: 'screenMatchSetup' };
+  const SCREENS = { launch: 'screenLaunch', players: 'screenPlayers', teams: 'screenTeams', matchSetup: 'screenMatchSetup', lineup: 'screenLineup' };
   let currentScreen = 'launch';
 
   function showScreen(name) {
