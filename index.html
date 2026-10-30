@@ -415,6 +415,23 @@
   .event-bar { display: flex; gap: 6px; }
   .event-row { flex: 1; display: flex; gap: 6px; min-width: 0; }
   .event-row button { min-width: 0; }
+  .bar-btn { flex: none; padding: 0 10px; font-size: 18px; min-height: 38px; }
+  .break-clock { text-align: center; font-size: 12px; font-weight: 700; color: var(--amber); }
+  .bin-strip { flex: none; width: 62px; display: flex; flex-direction: column; gap: 6px; }
+  .bin-player { display: flex; flex-direction: column; align-items: center; gap: 2px; opacity: 0.75; }
+  .bin-player .initials { width: 32px; height: 32px; filter: grayscale(1); }
+  .bin-count { font-family: 'Barlow Condensed', sans-serif; font-weight: 700; font-size: 13px; color: var(--amber); }
+  .bin-player.ready .bin-count { color: #3FA86A; }
+  .bin-player.off { opacity: 0.45; }
+  .bin-player.off .bin-count { color: var(--muted); }
+  .pitch-player.binned { opacity: 0.35; }
+  /* Pitch and bin players become buttons for the scorer; strip the default button chrome. */
+  button.pitch-player, button.bin-player {
+    background: none; border: 0; padding: 0; min-height: 0; min-width: 0; font-weight: 400;
+  }
+  .bin-player .pname { font-size: 10px; max-width: 58px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .menu-item { width: 100%; margin-bottom: 8px; }
+  .bench-tag { flex: none; margin-left: auto; font-size: 11px; color: var(--muted); }
   .log-row { display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 8px 0; }
   .log-row + .log-row { border-top: 1px solid var(--border); }
   .log-time { flex: none; width: 46px; font-family: 'Barlow Condensed', sans-serif; font-weight: 700; color: var(--muted); }
@@ -537,17 +554,22 @@
 
     <section class="screen" id="screenMatch" hidden>
       <div class="match-bar">
+        <button type="button" id="matchMenuBtn" class="bar-btn" aria-label="Match menu">⋮</button>
         <div class="match-side" id="matchSideA"></div>
         <div class="match-clock">
           <div class="clock-time num" id="clockTime">0:00</div>
           <div class="clock-half" id="clockHalf">1ST HALF</div>
         </div>
         <div class="match-side" id="matchSideB"></div>
+        <button type="button" id="swapSidesBtn" class="bar-btn" aria-label="Swap sides">⇄</button>
       </div>
+      <div class="break-clock" id="breakClock" hidden></div>
       <div class="warn-line" id="matchWarn"></div>
       <div class="pitch">
+        <div class="bin-strip" id="binA"></div>
         <div class="pitch-half" id="pitchA"></div>
         <div class="pitch-half" id="pitchB"></div>
+        <div class="bin-strip" id="binB"></div>
       </div>
       <div class="event-bar">
         <div class="event-row" id="eventRowA"></div>
@@ -666,6 +688,30 @@
     <div class="form-msg" id="logMsg" aria-live="polite"></div>
     <div class="modal-actions">
       <button type="button" id="logClose">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- Substitution -->
+<div class="overlay" id="subOverlay" role="dialog" aria-modal="true" aria-labelledby="subTitle">
+  <div class="modal" style="max-width:460px">
+    <h3 id="subTitle">Substitution</h3>
+    <div class="squad-picker" id="subList"></div>
+    <div class="form-msg" id="subMsg" aria-live="polite"></div>
+    <div class="modal-actions">
+      <button type="button" id="subKeeper" hidden>Make keeper</button>
+      <button type="button" id="subCancel">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- Match menu -->
+<div class="overlay" id="menuOverlay" role="dialog" aria-modal="true" aria-labelledby="menuTitle">
+  <div class="modal" style="max-width:380px">
+    <h3 id="menuTitle">Match menu</h3>
+    <div id="menuList"></div>
+    <div class="modal-actions">
+      <button type="button" id="menuClose">Close</button>
     </div>
   </div>
 </div>
@@ -799,6 +845,14 @@
   document.addEventListener('keydown', (e) => {
     if ($('confirmOverlay').classList.contains('open')) {
       if (e.key === 'Escape') closeConfirm();
+      return;
+    }
+    if ($('menuOverlay').classList.contains('open')) {
+      if (e.key === 'Escape') closeMenu();
+      return;
+    }
+    if ($('subOverlay').classList.contains('open')) {
+      if (e.key === 'Escape') closeSub();
       return;
     }
     if ($('logOverlay').classList.contains('open')) {
@@ -1938,12 +1992,32 @@
       : liveMatch.status === 'finished' ? 'FULL TIME'
       : liveMatch.current_half === 2 ? '2ND HALF'
       : '1ST HALF';
+    renderBreakClock();
+    renderBins();
   }
 
+  // Ticks while live (clock and bin countdowns, which run on wall time even when paused)
+  // and at half time (break countdown).
   function startClockTimer() {
     if (clockTimer) clearInterval(clockTimer);
     clockTimer = null;
-    if (liveMatch && liveMatch.is_running) clockTimer = setInterval(renderClock, 250);
+    if (liveMatch && (liveMatch.status === 'live' || liveMatch.status === 'halftime')) {
+      clockTimer = setInterval(renderClock, 250);
+    }
+  }
+
+  function renderBreakClock() {
+    const el = $('breakClock');
+    if (!liveMatch || liveMatch.status !== 'halftime') {
+      el.hidden = true;
+      return;
+    }
+    const since = liveMatch.half_started_at
+      ? Math.floor((nowMs() - new Date(liveMatch.half_started_at).getTime()) / 1000)
+      : 0;
+    const left = (liveMatch.break_secs || 0) - Math.max(0, since);
+    el.textContent = left > 0 ? `BREAK ${formatClock(left)}` : 'BREAK OVER';
+    el.hidden = false;
   }
 
   function stopClockTimer() {
@@ -1970,20 +2044,13 @@
       // The launch list only carries summary columns; the clock needs the full row.
       const { data: row, error: matchError } = await getClient()
         .from('matches')
-        .select('id, status, match_type, team_a_id, team_b_id, created_at, first_half_secs, second_half_secs, current_half, half_started_at, paused_secs, is_running')
+        .select('id, status, match_type, team_a_id, team_b_id, created_at, first_half_secs, break_secs, second_half_secs, current_half, half_started_at, paused_secs, is_running, team_a_side')
         .eq('id', match.id)
         .single();
       if (matchError) throw matchError;
       liveMatch = row;
 
-      const { data, error } = await getClient()
-        .from('match_players')
-        .select('player_id, team_id, on_pitch, is_keeper')
-        .eq('match_id', match.id);
-      if (error) throw error;
-      livePlayers = (data || [])
-        .map((r) => ({ ...r, player: players.find((p) => p.id === r.player_id) }))
-        .filter((r) => r.player);
+      await reloadLivePlayers();
 
       liveEvents = [];
       await loadEvents();
@@ -2001,20 +2068,49 @@
     return livePlayers.filter((r) => r.team_id === teamId);
   }
 
+  async function reloadLivePlayers() {
+    const { data, error } = await getClient()
+      .from('match_players')
+      .select('player_id, team_id, on_pitch, is_keeper, sin_bin_until, sin_bin_secs_left, sent_off')
+      .eq('match_id', liveMatch.id);
+    if (error) throw error;
+    livePlayers = (data || [])
+      .map((r) => ({ ...r, player: players.find((p) => p.id === r.player_id) }))
+      .filter((r) => r.player);
+  }
+
+  async function updateMatchPlayer(playerId, fields) {
+    const { error } = await getClient()
+      .from('match_players')
+      .update(fields)
+      .eq('match_id', liveMatch.id)
+      .eq('player_id', playerId);
+    if (error) throw error;
+  }
+
+  // Team A plays left unless team_a_side says right; the four positional slots follow it.
+  function sideTeamIds() {
+    const m = liveMatch;
+    return m.team_a_side === 'right' ? [m.team_b_id, m.team_a_id] : [m.team_a_id, m.team_b_id];
+  }
+
   function renderMatch() {
     if (!liveMatch) return;
     const m = liveMatch;
     const size = Number(m.match_type);
+    const [leftId, rightId] = sideTeamIds();
     const sides = [
-      { teamId: m.team_a_id, sideEl: $('matchSideA'), pitchEl: $('pitchA'), eventEl: $('eventRowA'), right: false },
-      { teamId: m.team_b_id, sideEl: $('matchSideB'), pitchEl: $('pitchB'), eventEl: $('eventRowB'), right: true }
+      { teamId: leftId, sideEl: $('matchSideA'), pitchEl: $('pitchA'), eventEl: $('eventRowA'), right: false },
+      { teamId: rightId, sideEl: $('matchSideB'), pitchEl: $('pitchB'), eventEl: $('eventRowB'), right: true }
     ];
     for (const s of sides) {
       s.team = teamById(s.teamId);
       s.name = s.team ? s.team.name : 'Unknown team';
       s.colour = s.team ? s.team.colour : '';
       s.onPitch = sideOf(s.teamId).filter((r) => r.on_pitch);
+      s.punished = sideOf(s.teamId).filter((r) => r.sent_off || binSecsLeft(r) !== null);
     }
+    const canSub = state.role === 'scorer' && m.status === 'live';
 
     const warnings = [];
     sides.forEach((s, i) => {
@@ -2046,8 +2142,12 @@
       const swatch = TEAM_COLOURS.find((c) => c.hex === s.colour);
       s.pitchEl.replaceChildren();
       for (const r of s.onPitch) {
-        const pp = document.createElement('div');
+        const pp = document.createElement(canSub ? 'button' : 'div');
         pp.className = 'pitch-player' + (r.is_keeper ? ' keeper' : '');
+        if (canSub) {
+          pp.type = 'button';
+          pp.addEventListener('click', () => openSub(r));
+        }
 
         const badge = document.createElement('span');
         badge.className = 'initials';
@@ -2063,7 +2163,10 @@
         s.pitchEl.append(pp);
       }
 
-      if (!s.onPitch.some((r) => r.player.gender === 'F')) {
+      // A shortfall caused by a bin or send-off is a punishment, not a selection choice.
+      const femaleOnPitch = s.onPitch.some((r) => r.player.gender === 'F');
+      const femalePunished = s.punished.some((r) => r.player.gender === 'F');
+      if (!femaleOnPitch && !femalePunished) {
         warnings.push(`${s.name} — no female player on pitch`);
       }
 
@@ -2086,6 +2189,8 @@
     });
     $('matchWarn').textContent = warnings.join(' · ');
     $('openLogBtn').hidden = !['live', 'halftime', 'finished'].includes(m.status);
+    $('swapSidesBtn').hidden = !['ready', 'live', 'halftime'].includes(m.status);
+    renderBins(true);
 
     const controls = $('matchControls');
     controls.replaceChildren();
@@ -2155,12 +2260,45 @@
       title: 'End the first half?',
       text: 'The clock stops and the match goes to half time.',
       okLabel: 'Half time',
-      onConfirm: () => patchMatch({ status: 'halftime', is_running: false, paused_secs: elapsedSecs(liveMatch) })
+      onConfirm: async () => {
+        const paused = elapsedSecs(liveMatch);
+        // Freeze running bins so they do not tick down through the break.
+        try {
+          for (const r of livePlayers) {
+            if (r.sent_off || !r.sin_bin_until) continue;
+            await updateMatchPlayer(r.player_id, { sin_bin_secs_left: binSecsLeft(r), sin_bin_until: null });
+          }
+        } catch (err) {
+          setMatchStatus(describeError(err), true);
+          console.error('Pitchside bin freeze failed:', err);
+          return;
+        }
+        // half_started_at is re-stamped so the break countdown has its own start point.
+        await patchMatch({ status: 'halftime', is_running: false, paused_secs: paused, half_started_at: new Date().toISOString() });
+        await refreshLivePlayers();
+      }
     });
   }
 
   async function startSecondHalf() {
-    await patchMatch({ status: 'live', current_half: 2, half_started_at: new Date().toISOString(), paused_secs: 0, is_running: true });
+    // Restart frozen bins from where they stopped.
+    try {
+      for (const r of livePlayers) {
+        if (r.sin_bin_secs_left === null || r.sin_bin_secs_left === undefined) continue;
+        await updateMatchPlayer(r.player_id, {
+          sin_bin_until: new Date(nowMs() + r.sin_bin_secs_left * 1000).toISOString(),
+          sin_bin_secs_left: null
+        });
+      }
+    } catch (err) {
+      setMatchStatus(describeError(err), true);
+      console.error('Pitchside bin resume failed:', err);
+      return;
+    }
+    // Sides change at half time; the swap button can still override it.
+    const side = liveMatch.team_a_side === 'right' ? 'left' : 'right';
+    await patchMatch({ status: 'live', current_half: 2, half_started_at: new Date().toISOString(), paused_secs: 0, is_running: true, team_a_side: side });
+    await refreshLivePlayers();
   }
 
   async function goFullTime() {
@@ -2171,6 +2309,287 @@
       onConfirm: () => patchMatch({ status: 'finished', is_running: false, paused_secs: elapsedSecs(liveMatch) })
     });
   }
+
+  // Reload livePlayers and redraw; reports its own errors.
+  async function refreshLivePlayers() {
+    try {
+      await reloadLivePlayers();
+    } catch (err) {
+      setMatchStatus(describeError(err), true);
+      console.error('Pitchside line-up reload failed:', err);
+    }
+    renderMatch();
+  }
+
+  // ---------- Sin bin ----------
+  let binsKey = '';
+  let binBusy = false;
+
+  function binSecsLeft(row) {
+    if (typeof row.sin_bin_secs_left === 'number') return row.sin_bin_secs_left;   // frozen at half time
+    if (row.sin_bin_until) return Math.max(0, Math.ceil((new Date(row.sin_bin_until).getTime() - nowMs()) / 1000));
+    return null;
+  }
+
+  // Called every clock tick. Only rebuilds when something visible changed, so a
+  // tappable "ready" player is not replaced between press and release.
+  function renderBins(force) {
+    if (!liveMatch) return;
+    const isScorer = state.role === 'scorer';
+    const [leftId, rightId] = sideTeamIds();
+    const strips = [[leftId, $('binA')], [rightId, $('binB')]].map(([teamId, el]) => ({
+      teamId,
+      el,
+      rows: sideOf(teamId)
+        .filter((r) => r.sent_off || binSecsLeft(r) !== null)
+        .map((r) => ({ r, secs: r.sent_off ? null : binSecsLeft(r) }))
+    }));
+
+    const key = [isScorer, binBusy, ...strips.map((s) => s.teamId + ':' + s.rows.map((x) => `${x.r.player_id}=${x.r.sent_off ? 'off' : x.secs}`).join(','))].join('|');
+    if (!force && key === binsKey) return;
+    binsKey = key;
+
+    for (const s of strips) {
+      const team = teamById(s.teamId);
+      s.el.replaceChildren();
+      for (const { r, secs } of s.rows) {
+        const tappable = !r.sent_off && secs === 0 && isScorer;
+        const item = document.createElement(tappable ? 'button' : 'div');
+        item.className = 'bin-player' + (r.sent_off ? ' off' : secs === 0 ? ' ready' : '');
+        if (tappable) {
+          item.type = 'button';
+          item.disabled = binBusy;
+          item.setAttribute('aria-label', `Return ${r.player.name} to the pitch`);
+          item.addEventListener('click', () => returnFromBin(r));
+        }
+
+        const badge = document.createElement('span');
+        badge.className = 'initials';
+        badge.textContent = initials(r.player.name);
+        if (team) badge.style.background = team.colour;
+
+        const pname = document.createElement('span');
+        pname.className = 'pname';
+        pname.textContent = r.player.name;
+
+        const count = document.createElement('span');
+        count.className = 'bin-count';
+        count.textContent = r.sent_off ? 'OFF' : String(secs);
+
+        item.append(badge, pname, count);
+        s.el.append(item);
+      }
+    }
+  }
+
+  async function returnFromBin(row) {
+    console.info('Pitchside bin return tapped:', { match_id: liveMatch && liveMatch.id, player_id: row.player_id, team_id: row.team_id });
+    if (state.role !== 'scorer' || binBusy) return;
+    binBusy = true;
+    renderBins(true);
+    try {
+      // .select() returns the rows actually changed. An update blocked by row-level
+      // security returns no error and no rows, so zero rows is treated as a failure.
+      const { data, error } = await getClient()
+        .from('match_players')
+        .update({ on_pitch: true, sin_bin_until: null, sin_bin_secs_left: null })
+        .eq('match_id', liveMatch.id)
+        .eq('player_id', row.player_id)
+        .select('player_id, on_pitch, sin_bin_until, sin_bin_secs_left');
+      if (error) throw error;
+      if (!data || !data.length) {
+        throw new Error(`No match_players row was updated for player ${row.player_id} in match ${liveMatch.id}. Check the row exists and that the update policy allows it.`);
+      }
+    } catch (err) {
+      $('matchStatus').textContent = describeError(err);
+      $('matchStatus').className = 'panel-foot error';
+      console.error('Pitchside bin return failed:', err);
+    }
+    await refreshLivePlayers();
+    binBusy = false;
+    renderBins(true);
+  }
+
+  // ---------- Substitutions ----------
+  let subFlow = { out: null, busy: false, mode: 'sub' };
+
+  function openSub(row) {
+    if (state.role !== 'scorer' || !liveMatch || liveMatch.status !== 'live') return;
+    subFlow = { out: row, busy: false, mode: 'sub' };
+    $('subMsg').textContent = '';
+    $('subKeeper').hidden = !row.is_keeper;
+    renderSubList();
+    $('subOverlay').classList.add('open');
+  }
+
+  function closeSub() {
+    $('subOverlay').classList.remove('open');
+    subFlow.busy = false;
+  }
+
+  function renderSubList() {
+    const out = subFlow.out;
+    const team = sideOf(out.team_id).filter((r) => r.player_id !== out.player_id);
+    const bench = team.filter((r) => !r.on_pitch && !r.sent_off && binSecsLeft(r) === null);
+    const onPitch = team.filter((r) => r.on_pitch);
+
+    let candidates;
+    if (subFlow.mode === 'keeper') {
+      $('subTitle').textContent = `New keeper (instead of ${out.player.name})`;
+      candidates = onPitch;
+    } else {
+      $('subTitle').textContent = `Off: ${out.player.name}`;
+      // The keeper can be swapped with anyone: bench players come on, on-pitch players take the gloves.
+      candidates = out.is_keeper ? [...bench, ...onPitch] : bench;
+    }
+
+    const list = $('subList');
+    list.replaceChildren();
+    for (const r of candidates) {
+      const row = document.createElement('button');
+      row.type = 'button';
+      row.className = 'player-row';
+      row.disabled = subFlow.busy;
+
+      const badge = document.createElement('span');
+      badge.className = 'initials';
+      badge.textContent = initials(r.player.name);
+
+      const name = document.createElement('span');
+      name.className = 'player-name';
+      name.textContent = r.player.name;
+
+      row.append(badge, name);
+      if (r.player.gender === 'F') {
+        const tag = document.createElement('span');
+        tag.className = 'f-tag';
+        tag.textContent = 'F';
+        row.append(tag);
+      }
+      if (r.on_pitch && subFlow.mode === 'sub') {
+        const where = document.createElement('span');
+        where.className = 'bench-tag';
+        where.textContent = 'on pitch';
+        row.append(where);
+      }
+      row.addEventListener('click', () => (r.on_pitch ? moveKeeper(r) : makeSub(r)));
+      list.append(row);
+    }
+    if (!candidates.length) {
+      const empty = document.createElement('div');
+      empty.className = 'empty';
+      empty.textContent = subFlow.mode === 'keeper' ? 'No other players on pitch' : 'No players on the bench';
+      list.append(empty);
+    }
+  }
+
+  async function makeSub(inRow) {
+    if (subFlow.busy) return;
+    const out = subFlow.out;
+    subFlow.busy = true;
+    renderSubList();
+    try {
+      await updateMatchPlayer(out.player_id, { on_pitch: false, is_keeper: false });
+      await updateMatchPlayer(inRow.player_id, { on_pitch: true, is_keeper: !!out.is_keeper });
+      const { error } = await getClient().from('match_events').insert({
+        match_id: liveMatch.id,
+        team_id: out.team_id,
+        player_id: inRow.player_id,
+        assist_player_id: out.player_id,
+        event_type: 'sub',
+        clock_secs: elapsedSecs(liveMatch)
+      });
+      if (error) throw error;
+      closeSub();
+      await refreshLivePlayers();
+      await loadEvents();
+    } catch (err) {
+      subFlow.busy = false;
+      renderSubList();
+      $('subMsg').textContent = describeError(err);
+      console.error('Pitchside substitution failed:', err);
+      await refreshLivePlayers();
+    }
+  }
+
+  async function moveKeeper(newRow) {
+    if (subFlow.busy) return;
+    const out = subFlow.out;
+    subFlow.busy = true;
+    renderSubList();
+    try {
+      await updateMatchPlayer(out.player_id, { is_keeper: false });
+      await updateMatchPlayer(newRow.player_id, { is_keeper: true });
+      closeSub();
+      await refreshLivePlayers();
+    } catch (err) {
+      subFlow.busy = false;
+      renderSubList();
+      $('subMsg').textContent = describeError(err);
+      console.error('Pitchside keeper change failed:', err);
+      await refreshLivePlayers();
+    }
+  }
+
+  // ---------- Swap sides and match menu ----------
+  function swapSides() {
+    if (state.role !== 'scorer' || !liveMatch) return;
+    patchMatch({ team_a_side: liveMatch.team_a_side === 'right' ? 'left' : 'right' });
+  }
+
+  function openMenu() {
+    if (!liveMatch) return;
+    const list = $('menuList');
+    list.replaceChildren();
+
+    const add = (label, handler) => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'menu-item';
+      btn.textContent = label;
+      btn.addEventListener('click', handler);
+      list.append(btn);
+    };
+
+    add('Event log', () => {
+      closeMenu();
+      openLog();
+    });
+    if (state.role === 'scorer' && (liveMatch.status === 'live' || liveMatch.status === 'halftime')) {
+      add('Abandon match', () => {
+        closeMenu();
+        const a = teamById(liveMatch.team_a_id);
+        const b = teamById(liveMatch.team_b_id);
+        const score = `${a ? a.name : 'Unknown team'} ${scoreFor(liveMatch.team_a_id)} – ${scoreFor(liveMatch.team_b_id)} ${b ? b.name : 'Unknown team'}`;
+        showConfirm({
+          title: 'Abandon match?',
+          text: `The match stops at ${score} and is recorded as abandoned.`,
+          okLabel: 'Abandon',
+          onConfirm: async () => {
+            await patchMatch({ status: 'abandoned', is_running: false });
+            if (liveMatch.status === 'abandoned') showScreen('launch');
+          }
+        });
+      });
+    }
+    $('menuOverlay').classList.add('open');
+  }
+
+  function closeMenu() {
+    $('menuOverlay').classList.remove('open');
+  }
+
+  $('swapSidesBtn').addEventListener('click', swapSides);
+  $('matchMenuBtn').addEventListener('click', openMenu);
+  $('menuClose').addEventListener('click', closeMenu);
+  $('menuOverlay').addEventListener('click', (e) => { if (e.target === e.currentTarget) closeMenu(); });
+  $('subCancel').addEventListener('click', closeSub);
+  $('subOverlay').addEventListener('click', (e) => { if (e.target === e.currentTarget) closeSub(); });
+  $('subKeeper').addEventListener('click', () => {
+    subFlow.mode = 'keeper';
+    $('subKeeper').hidden = true;
+    renderSubList();
+  });
 
   // ---------- Match events ----------
   let liveEvents = [];
@@ -2228,6 +2647,7 @@
     if (e.event_type === 'save') return `${who} — save`;
     if (e.event_type === 'foul') return `${who} — foul`;
     if (e.event_type === 'card') return `${who} — ${e.detail} card`;
+    if (e.event_type === 'sub') return `${who} on for ${playerName(e.assist_player_id)}`;
     return `${who} — ${e.event_type}`;
   }
 
@@ -2374,6 +2794,8 @@
   async function commitEvent() {
     if (eventFlow.busy) return;
     eventFlow.busy = true;
+    const { type, team } = eventFlow;
+    const playerId = eventFlow.data.player_id;
     renderEventStep();
     try {
       const { error } = await getClient().from('match_events').insert({
@@ -2388,12 +2810,49 @@
       if (error) throw error;
       closeEvent();
       await loadEvents();
+      if (type === 'card') await applyCardConsequence(playerId, team);
     } catch (err) {
       eventFlow.busy = false;
       renderEventStep();
       $('eventMsg').textContent = describeError(err);
       console.error('Pitchside event save failed:', err);
     }
+  }
+
+  function cardTotals(playerId) {
+    const cards = liveEvents.filter((e) => e.event_type === 'card' && e.player_id === playerId);
+    return {
+      yellows: cards.filter((e) => e.detail === 'yellow').length,
+      reds: cards.filter((e) => e.detail === 'red').length
+    };
+  }
+
+  // House rules, read after the new card is saved and liveEvents reloaded:
+  // 1 yellow → nothing; 2 yellows or 1 red → 60 s sin bin; 3+ yellows or 2+ reds → sent off.
+  async function applyCardConsequence(playerId, teamId) {
+    if (!playerId) return;
+    const { yellows, reds } = cardTotals(playerId);
+    let fields = null;
+    if (yellows >= 3 || reds >= 2) {
+      fields = { sent_off: true, on_pitch: false, sin_bin_until: null, sin_bin_secs_left: null };
+    } else if (yellows === 2 || reds === 1) {
+      fields = { sin_bin_until: new Date(nowMs() + 60 * 1000).toISOString(), sin_bin_secs_left: null, on_pitch: false };
+    }
+    if (!fields) return;
+
+    try {
+      const { error } = await getClient()
+        .from('match_players')
+        .update(fields)
+        .eq('match_id', liveMatch.id)
+        .eq('player_id', playerId)
+        .eq('team_id', teamId);
+      if (error) throw error;
+    } catch (err) {
+      setMatchStatus(describeError(err), true);
+      console.error('Pitchside card consequence failed:', err);
+    }
+    await refreshLivePlayers();
   }
 
   function closeEvent() {
