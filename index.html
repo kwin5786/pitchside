@@ -78,6 +78,7 @@
   }
   .brand {
     margin: 0;
+    margin-right: auto;
     font-size: 26px;
     font-weight: 700;
     letter-spacing: 0.01em;
@@ -96,6 +97,36 @@
   .role-badge.scorer { color: #fff; background: var(--green); border-color: var(--green); }
 
   .panels { display: flex; flex-direction: column; gap: 12px; }
+
+  .screen[hidden] { display: none; }
+  .back-btn { padding: 0 12px; font-size: 20px; line-height: 1; }
+
+  /* ---------- Launch screen ---------- */
+  .launch { display: flex; flex-direction: column; gap: 16px; max-width: 480px; margin: 0 auto; }
+  .hero {
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 6px; height: 104px; width: 100%;
+    background: var(--green); border-color: var(--green); color: #fff;
+    font-size: 17px; font-weight: 700; letter-spacing: 0.04em; border-radius: 14px;
+  }
+  .tiles { display: flex; gap: 9px; }
+  .tile {
+    flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 6px; height: 72px; padding: 0 6px; border-radius: 11px;
+    font-size: 11px; font-weight: 700; letter-spacing: 0.05em;
+  }
+  .no-match {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 14px;
+    padding: 26px 18px; text-align: center;
+  }
+  .no-match strong { display: block; font-size: 16px; color: #fff; margin-bottom: 8px; }
+  .no-match span { font-size: 13px; color: var(--muted); }
+  .section-label {
+    font-size: 10px; font-weight: 700; letter-spacing: 0.12em; color: var(--muted);
+  }
+  .launch-foot { width: 100%; height: 48px; font-size: 12px; letter-spacing: 0.06em; }
+  body[data-role="viewer"] .scorer-only { display: none; }
+  body[data-role="scorer"] .viewer-only { display: none; }
 
   .panel {
     background: var(--panel);
@@ -327,15 +358,38 @@
 <body>
 <div class="app">
   <header class="topbar">
+    <button type="button" id="backBtn" class="back-btn" hidden aria-label="Back">&#8592;</button>
     <h1 class="brand">Pitchside</h1>
     <div class="topbar-right">
       <span id="roleBadge" class="role-badge">Viewer</span>
-      <button id="signInBtn" type="button">Scorer sign in</button>
-      <button id="signOutBtn" type="button" hidden>Sign out</button>
     </div>
   </header>
 
   <main class="panels">
+    <section class="screen" id="screenLaunch" hidden>
+      <div class="launch">
+        <button type="button" class="hero scorer-only" id="startMatchBtn" disabled>START A MATCH</button>
+
+        <div class="no-match viewer-only">
+          <strong>No match right now</strong>
+          <span>When a match kicks off, the score and clock will appear here.</span>
+        </div>
+
+        <div class="tiles">
+          <button type="button" class="tile" id="tileTeams">TEAMS</button>
+          <button type="button" class="tile" id="tileTournament" disabled>TOURNAMENT</button>
+          <button type="button" class="tile" id="tileSetup">SETUP</button>
+        </div>
+
+        <div class="section-label">RECENT RESULTS</div>
+        <div class="empty" id="recentResults">No matches yet</div>
+
+        <button id="signInBtn" type="button" class="launch-foot">Scorer sign in</button>
+        <button id="signOutBtn" type="button" class="launch-foot" hidden>Sign out</button>
+      </div>
+    </section>
+
+    <section class="screen" id="screenPlayers" hidden>
     <section class="panel" id="playersPanel">
       <div class="panel-head">
         <h2>Players</h2>
@@ -344,7 +398,9 @@
       <div class="player-list" id="playersList"></div>
       <div class="panel-foot" id="playersStatus">Loading players…</div>
     </section>
+    </section>
 
+    <section class="screen" id="screenTeams" hidden>
     <section class="panel" id="teamsPanel">
       <div class="panel-head">
         <h2>Teams</h2>
@@ -353,10 +409,6 @@
       <div class="player-list" id="teamsList"></div>
       <div class="panel-foot" id="teamsStatus">Loading teams…</div>
     </section>
-
-    <section class="panel" id="matchesPanel">
-      <h2>Matches</h2>
-      <div class="empty">No matches yet</div>
     </section>
   </main>
 </div>
@@ -1163,7 +1215,25 @@
   $('teamDelete').addEventListener('click', confirmDeleteTeam);
   $('teamOverlay').addEventListener('click', (e) => { if (e.target === e.currentTarget) closeTeamPanel(); });
 
+  // ---------- Screen router ----------
+  const SCREENS = { launch: 'screenLaunch', players: 'screenPlayers', teams: 'screenTeams' };
+  let currentScreen = 'launch';
+
+  function showScreen(name) {
+    currentScreen = name;
+    for (const key of Object.keys(SCREENS)) {
+      $(SCREENS[key]).hidden = key !== name;
+    }
+    $('backBtn').hidden = name === 'launch';
+    window.scrollTo(0, 0);
+  }
+
+  $('backBtn').addEventListener('click', () => showScreen('launch'));
+  $('tileTeams').addEventListener('click', () => showScreen('teams'));
+  $('tileSetup').addEventListener('click', () => showScreen('players'));
+
   // ---------- Init ----------
+  showScreen('launch');
   renderRole();
   loadPlayers();
   loadTeams();
