@@ -383,6 +383,32 @@
     .panel { padding: 18px 20px; }
     .panels { gap: 16px; }
   }
+
+  /* ---------- Match screen ---------- */
+  #screenMatch { display: none; }
+  #screenMatch:not([hidden]) { display: flex; flex-direction: column; gap: 8px; height: 100%; }
+  .match-bar { display: flex; align-items: center; gap: 12px; }
+  .match-side { flex: 1; display: flex; align-items: center; gap: 8px; min-width: 0; }
+  .match-side.right { flex-direction: row-reverse; }
+  .match-side .score { font-family: 'Barlow Condensed', sans-serif; font-weight: 700; font-size: 34px; line-height: 1; }
+  .match-side .team-name { font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .short-tag { flex: none; font-size: 10px; font-weight: 700; color: var(--amber); border: 1px solid var(--amber); border-radius: 999px; padding: 2px 6px; }
+  .match-clock { flex: none; text-align: center; }
+  .clock-time { font-size: 28px; font-weight: 700; line-height: 1; }
+  .clock-time.over { color: var(--amber); }
+  .clock-half { font-size: 9px; font-weight: 700; letter-spacing: 0.1em; color: var(--muted); margin-top: 2px; }
+  .warn-line { min-height: 16px; font-size: 11px; color: var(--amber); text-align: center; }
+  .pitch { flex: 1; min-height: 140px; display: flex; gap: 6px; }
+  .pitch-half {
+    flex: 1; background: #12201A; border: 1px solid var(--border); border-radius: 10px;
+    padding: 8px; display: flex; flex-wrap: wrap; align-content: flex-start; gap: 8px;
+  }
+  .pitch-player { display: flex; flex-direction: column; align-items: center; gap: 3px; width: 56px; }
+  .pitch-player .initials { width: 38px; height: 38px; }
+  .pitch-player .pname { font-size: 10px; text-align: center; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 56px; }
+  .pitch-player.keeper .initials { border: 2px solid var(--amber); }
+  .match-controls { display: flex; gap: 8px; }
+  .match-controls button { flex: 1; }
 </style>
 </head>
 <body>
@@ -496,6 +522,24 @@
         <button type="button" id="saveLineupBtn" class="primary" style="width:100%" disabled>Save line-up</button>
         <div class="panel-foot" id="lineupStatus"></div>
       </div>
+    </section>
+
+    <section class="screen" id="screenMatch" hidden>
+      <div class="match-bar">
+        <div class="match-side" id="matchSideA"></div>
+        <div class="match-clock">
+          <div class="clock-time num" id="clockTime">0:00</div>
+          <div class="clock-half" id="clockHalf">1ST HALF</div>
+        </div>
+        <div class="match-side" id="matchSideB"></div>
+      </div>
+      <div class="warn-line" id="matchWarn"></div>
+      <div class="pitch">
+        <div class="pitch-half" id="pitchA"></div>
+        <div class="pitch-half" id="pitchB"></div>
+      </div>
+      <div class="match-controls" id="matchControls"></div>
+      <div class="panel-foot" id="matchStatus"></div>
     </section>
   </main>
 </div>
@@ -1510,7 +1554,10 @@
       btn.type = 'button';
       btn.className = 'match-card';
       if (state.role === 'scorer') {
-        btn.addEventListener('click', () => openLineup(m));
+        btn.addEventListener('click', () => {
+          if (m.status === 'setup') openLineup(m);
+          else if (m.status === 'ready' || m.status === 'live' || m.status === 'halftime') openMatch(m);
+        });
       } else {
         btn.disabled = true;
       }
@@ -1519,7 +1566,7 @@
       head.className = 'match-card-head';
       head.textContent = m.status === 'setup' ? 'UP NEXT'
         : m.status === 'ready' ? 'READY'
-        : 'LIVE NOW';
+        : 'LIVE NOW';   // live, halftime
 
       const teamsRow = document.createElement('div');
       teamsRow.className = 'match-card-teams';
@@ -1792,11 +1839,275 @@
 
   $('saveLineupBtn').addEventListener('click', saveLineup);
 
+  // ---------- Match clock ----------
+  let liveMatch = null;          // the match row currently open
+  let livePlayers = [];          // match_players rows joined to player objects
+  let clockTimer = null;
+  let serverOffsetMs = 0;        // database now() minus device now()
+
+  async function syncServerTime() {
+    try {
+      const { error } = await getClient().from('matches').select('id, created_at').limit(1);
+      if (error) throw error;
+    } catch (err) {
+      // leave serverOffsetMs at 0
+    }
+    serverOffsetMs = 0;
+    console.info('Pitchside: server-time sync is deferred; using device time.');
+  }
+
+  function nowMs() {
+    return Date.now() + serverOffsetMs;
+  }
+
+  function periodLength(m) {
+    return m.current_half === 2 ? m.second_half_secs : m.first_half_secs;
+  }
+
+  // While running: elapsed = now - half_started_at - paused_secs.
+  // While stopped (paused, half time, full time): paused_secs holds the frozen
+  // elapsed seconds written when the clock stopped, so the display stays put.
+  function elapsedSecs(m) {
+    if (!m.half_started_at) return 0;
+    if (!m.is_running) return Math.max(0, Math.floor(m.paused_secs || 0));
+    const secs = (nowMs() - new Date(m.half_started_at).getTime()) / 1000 - (m.paused_secs || 0);
+    return Math.max(0, Math.floor(secs));
+  }
+
+  function formatClock(secs) {
+    const m = Math.floor(secs / 60);
+    const s = secs % 60;
+    return `${m}:${String(s).padStart(2, '0')}`;
+  }
+
+  function renderClock() {
+    if (!liveMatch) return;
+    const secs = elapsedSecs(liveMatch);
+    $('clockTime').textContent = formatClock(secs);
+    $('clockTime').classList.toggle('over', secs > periodLength(liveMatch));
+    $('clockHalf').textContent = liveMatch.status === 'halftime' ? 'HALF TIME'
+      : liveMatch.status === 'finished' ? 'FULL TIME'
+      : liveMatch.current_half === 2 ? '2ND HALF'
+      : '1ST HALF';
+  }
+
+  function startClockTimer() {
+    if (clockTimer) clearInterval(clockTimer);
+    clockTimer = null;
+    if (liveMatch && liveMatch.is_running) clockTimer = setInterval(renderClock, 250);
+  }
+
+  function stopClockTimer() {
+    clearInterval(clockTimer);
+    clockTimer = null;
+  }
+
+  // ---------- Match screen ----------
+  let matchBusy = false;
+
+  function setMatchStatus(text, isError) {
+    $('matchStatus').textContent = text;
+    $('matchStatus').className = isError ? 'panel-foot error' : 'panel-foot';
+  }
+
+  async function openMatch(match) {
+    liveMatch = match;
+    livePlayers = [];
+    matchBusy = false;
+    setMatchStatus('', false);
+    syncServerTime();
+
+    try {
+      // The launch list only carries summary columns; the clock needs the full row.
+      const { data: row, error: matchError } = await getClient()
+        .from('matches')
+        .select('id, status, match_type, team_a_id, team_b_id, created_at, first_half_secs, second_half_secs, current_half, half_started_at, paused_secs, is_running')
+        .eq('id', match.id)
+        .single();
+      if (matchError) throw matchError;
+      liveMatch = row;
+
+      const { data, error } = await getClient()
+        .from('match_players')
+        .select('player_id, team_id, on_pitch, is_keeper')
+        .eq('match_id', match.id);
+      if (error) throw error;
+      livePlayers = (data || [])
+        .map((r) => ({ ...r, player: players.find((p) => p.id === r.player_id) }))
+        .filter((r) => r.player);
+    } catch (err) {
+      setMatchStatus(describeError(err), true);
+      console.error('Pitchside match open failed:', err);
+    }
+
+    renderMatch();
+    startClockTimer();
+    showScreen('match');
+  }
+
+  function sideOf(teamId) {
+    return livePlayers.filter((r) => r.team_id === teamId);
+  }
+
+  function renderMatch() {
+    if (!liveMatch) return;
+    const m = liveMatch;
+    const size = Number(m.match_type);
+    const sides = [
+      { teamId: m.team_a_id, sideEl: $('matchSideA'), pitchEl: $('pitchA'), right: false },
+      { teamId: m.team_b_id, sideEl: $('matchSideB'), pitchEl: $('pitchB'), right: true }
+    ];
+    for (const s of sides) {
+      s.team = teamById(s.teamId);
+      s.name = s.team ? s.team.name : 'Unknown team';
+      s.colour = s.team ? s.team.colour : '';
+      s.onPitch = sideOf(s.teamId).filter((r) => r.on_pitch);
+    }
+
+    const warnings = [];
+    sides.forEach((s, i) => {
+      const other = sides[1 - i];
+
+      s.sideEl.replaceChildren();
+      s.sideEl.className = 'match-side' + (s.right ? ' right' : '');
+
+      const score = document.createElement('span');
+      score.className = 'score';
+      score.textContent = '0';
+
+      const name = document.createElement('span');
+      name.className = 'team-name';
+      name.textContent = s.name;
+
+      const dot = document.createElement('span');
+      dot.className = 'colour-dot';
+      dot.style.background = s.colour;
+
+      s.sideEl.append(score, name, dot);
+      if (s.onPitch.length < size) {
+        const tag = document.createElement('span');
+        tag.className = 'short-tag';
+        tag.textContent = `${s.onPitch.length} v ${other.onPitch.length}`;
+        s.sideEl.append(tag);
+      }
+
+      const swatch = TEAM_COLOURS.find((c) => c.hex === s.colour);
+      s.pitchEl.replaceChildren();
+      for (const r of s.onPitch) {
+        const pp = document.createElement('div');
+        pp.className = 'pitch-player' + (r.is_keeper ? ' keeper' : '');
+
+        const badge = document.createElement('span');
+        badge.className = 'initials';
+        badge.textContent = initials(r.player.name);
+        badge.style.background = s.colour;
+        badge.style.color = swatch ? swatch.ink : '#fff';
+
+        const pname = document.createElement('span');
+        pname.className = 'pname';
+        pname.textContent = r.player.name;
+
+        pp.append(badge, pname);
+        s.pitchEl.append(pp);
+      }
+
+      if (!s.onPitch.some((r) => r.player.gender === 'F')) {
+        warnings.push(`${s.name} — no female player on pitch`);
+      }
+    });
+    $('matchWarn').textContent = warnings.join(' · ');
+
+    const controls = $('matchControls');
+    controls.replaceChildren();
+    const addControl = (label, handler, primary) => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.textContent = label;
+      if (primary) btn.className = 'primary';
+      btn.disabled = matchBusy;
+      btn.addEventListener('click', handler);
+      controls.append(btn);
+    };
+    if (m.status === 'ready') {
+      addControl('Kick off', kickOff, true);
+    } else if (m.status === 'live') {
+      addControl(m.is_running ? 'Pause' : 'Resume', togglePause, false);
+      if (m.current_half === 2) addControl('Full time', goFullTime, false);
+      else addControl('Half time', goHalfTime, false);
+    } else if (m.status === 'halftime') {
+      addControl('Start second half', startSecondHalf, true);
+    } else if (m.status === 'finished') {
+      addControl('Back to launch', () => showScreen('launch'), false);
+    }
+
+    renderClock();
+  }
+
+  async function patchMatch(fields) {
+    if (!liveMatch || matchBusy) return;
+    matchBusy = true;
+    renderMatch();
+    try {
+      const { error } = await getClient().from('matches').update(fields).eq('id', liveMatch.id);
+      if (error) throw error;
+      Object.assign(liveMatch, fields);
+      setMatchStatus('', false);
+    } catch (err) {
+      setMatchStatus(describeError(err), true);
+      console.error('Pitchside match update failed:', err);
+    }
+    matchBusy = false;
+    renderMatch();
+    startClockTimer();
+    await loadMatches();
+  }
+
+  async function kickOff() {
+    await patchMatch({ status: 'live', current_half: 1, half_started_at: new Date().toISOString(), paused_secs: 0, is_running: true });
+  }
+
+  function togglePause() {
+    if (liveMatch.is_running) {
+      showConfirm({
+        title: 'Pause the clock?',
+        text: 'The match clock will stop until you resume.',
+        okLabel: 'Pause',
+        onConfirm: () => patchMatch({ is_running: false, paused_secs: elapsedSecs(liveMatch) })
+      });
+    } else {
+      // Rebase the start time so the frozen elapsed time carries on from where it stopped.
+      patchMatch({ is_running: true, half_started_at: new Date(nowMs() - elapsedSecs(liveMatch) * 1000).toISOString(), paused_secs: 0 });
+    }
+  }
+
+  async function goHalfTime() {
+    showConfirm({
+      title: 'End the first half?',
+      text: 'The clock stops and the match goes to half time.',
+      okLabel: 'Half time',
+      onConfirm: () => patchMatch({ status: 'halftime', is_running: false, paused_secs: elapsedSecs(liveMatch) })
+    });
+  }
+
+  async function startSecondHalf() {
+    await patchMatch({ status: 'live', current_half: 2, half_started_at: new Date().toISOString(), paused_secs: 0, is_running: true });
+  }
+
+  async function goFullTime() {
+    showConfirm({
+      title: 'End the match?',
+      text: 'The clock stops and the result is final.',
+      okLabel: 'Full time',
+      onConfirm: () => patchMatch({ status: 'finished', is_running: false, paused_secs: elapsedSecs(liveMatch) })
+    });
+  }
+
   // ---------- Screen router ----------
-  const SCREENS = { launch: 'screenLaunch', players: 'screenPlayers', teams: 'screenTeams', matchSetup: 'screenMatchSetup', lineup: 'screenLineup' };
+  const SCREENS = { launch: 'screenLaunch', players: 'screenPlayers', teams: 'screenTeams', matchSetup: 'screenMatchSetup', lineup: 'screenLineup', match: 'screenMatch' };
   let currentScreen = 'launch';
 
   function showScreen(name) {
+    if (name !== 'match') stopClockTimer();
     currentScreen = name;
     for (const key of Object.keys(SCREENS)) {
       $(SCREENS[key]).hidden = key !== name;
