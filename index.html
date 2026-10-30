@@ -122,6 +122,90 @@
   }
   .panel-foot.error { color: var(--amber); }
 
+  .panel-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 8px;
+  }
+  .panel-head h2 { margin: 0; }
+
+  /* ---------- Player library ---------- */
+  .player-list { display: flex; flex-direction: column; }
+  .player-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-height: var(--touch);
+    width: 100%;
+    padding: 6px 0;
+    text-align: left;
+    font-weight: 400;
+  }
+  button.player-row {
+    background: none;
+    border: 0;
+    border-radius: 0;
+  }
+  .player-row + .player-row { border-top: 1px solid var(--border); }
+  .initials {
+    flex: none;
+    width: 34px;
+    height: 34px;
+    border-radius: 50%;
+    background: #2E3B36;
+    color: #E6EDE9;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: 'Barlow Condensed', 'Barlow', sans-serif;
+    font-weight: 600;
+    font-size: 15px;
+  }
+  .player-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .f-tag {
+    flex: none;
+    background: #F2F5F3;
+    color: #141413;
+    font-size: 11px;
+    font-weight: 700;
+    line-height: 1;
+    padding: 3px 7px;
+    border-radius: 999px;
+  }
+
+  /* ---------- Forms ---------- */
+  .field-label {
+    display: block;
+    margin: 10px 0 6px;
+    font-size: 13px;
+    color: var(--muted);
+  }
+  .text-input {
+    width: 100%;
+    min-height: var(--touch);
+    padding: 0 12px;
+    font: inherit;
+    font-size: 16px;
+    color: var(--text);
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 9px;
+  }
+  .text-input:focus { outline: 2px solid var(--muted); outline-offset: 1px; }
+  .seg { display: flex; gap: 10px; }
+  .seg .toggle { min-width: 64px; }
+  .toggle[aria-pressed="true"] { background: var(--green); border-color: var(--green); color: #fff; }
+  .form-msg { min-height: 20px; margin: 12px 0; font-size: 13px; color: var(--amber); }
+  button.danger { color: var(--amber); margin-right: auto; }
+  button:disabled { opacity: 0.45; cursor: default; filter: none; }
+
   /* ---------- Modals ---------- */
   .overlay {
     position: fixed;
@@ -216,9 +300,12 @@
 
   <main class="panels">
     <section class="panel" id="playersPanel">
-      <h2>Players</h2>
-      <div class="empty">No players yet</div>
-      <div class="panel-foot" id="playersStatus">Checking connection…</div>
+      <div class="panel-head">
+        <h2>Players</h2>
+        <button type="button" id="addPlayerBtn" hidden>Add player</button>
+      </div>
+      <div class="player-list" id="playersList"></div>
+      <div class="panel-foot" id="playersStatus">Loading players…</div>
     </section>
 
     <section class="panel" id="teamsPanel">
@@ -263,6 +350,26 @@
       <button type="button" data-key="clear" class="key-fn">Clear</button>
       <button type="button" data-key="0">0</button>
       <button type="button" data-key="back" class="key-fn" aria-label="Delete">⌫</button>
+    </div>
+  </div>
+</div>
+
+<!-- Add / edit player -->
+<div class="overlay" id="playerOverlay" role="dialog" aria-modal="true" aria-labelledby="playerTitle">
+  <div class="modal" style="max-width:420px">
+    <h3 id="playerTitle">Add player</h3>
+    <label class="field-label" for="playerName">Name</label>
+    <input class="text-input" id="playerName" type="text" autocomplete="off" maxlength="80">
+    <div class="field-label">Gender</div>
+    <div class="seg" id="playerGender">
+      <button type="button" class="toggle" data-gender="M" aria-pressed="false">M</button>
+      <button type="button" class="toggle" data-gender="F" aria-pressed="false">F</button>
+    </div>
+    <div class="form-msg" id="playerMsg" aria-live="polite"></div>
+    <div class="modal-actions">
+      <button type="button" id="playerDelete" class="danger" hidden>Delete</button>
+      <button type="button" id="playerCancel">Cancel</button>
+      <button type="button" id="playerSave" class="primary" disabled>Save</button>
     </div>
   </div>
 </div>
@@ -312,6 +419,8 @@
     $('roleBadge').textContent = isScorer ? 'Scorer' : 'Viewer';
     $('roleBadge').classList.toggle('scorer', isScorer);
     document.body.dataset.role = state.role;
+    if (!isScorer) closePlayerPanel();
+    renderPlayers();
   }
 
   // ---------- PIN entry ----------
@@ -393,6 +502,11 @@
       if (e.key === 'Escape') closeConfirm();
       return;
     }
+    if ($('playerOverlay').classList.contains('open')) {
+      if (e.key === 'Escape') closePlayerPanel();
+      else if (e.key === 'Enter' && e.target === $('playerName') && !$('playerSave').disabled) savePlayer();
+      return;
+    }
     if ($('pinOverlay').classList.contains('open')) {
       if (e.key === 'Escape') closePin();
       else if (/^\d$/.test(e.key)) pinKey(e.key);
@@ -433,37 +547,234 @@
     el.classList.toggle('error', !!isError);
   }
 
-  async function checkConnection() {
-    try {
-      if (!window.supabase || typeof window.supabase.createClient !== 'function') {
-        throw new Error('Supabase library failed to load from the CDN.');
-      }
-      if (!sb) sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+  function getClient() {
+    if (!window.supabase || typeof window.supabase.createClient !== 'function') {
+      throw new Error('Supabase library failed to load from the CDN.');
+    }
+    if (!sb) sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+    return sb;
+  }
 
-      const { count, error, status, statusText } = await sb
+  // ---------- Player library ----------
+  const FK_VIOLATION = '23503';
+
+  let players = [];
+  let playersLoaded = false;
+
+  async function loadPlayers() {
+    try {
+      const { data, error, status, statusText } = await getClient()
         .from('players')
-        .select('*', { count: 'exact', head: true });
+        .select('id, name, gender')
+        .order('name', { ascending: true });
 
       if (error) {
         const msg = describeError(error);
         throw new Error(msg === '{}' || !msg ? `Request failed: ${status} ${statusText || ''}`.trim() : msg);
       }
 
-      const n = count || 0;
-      setPlayersStatus(`${n === 1 ? 'player' : 'players'} in the library`, false);
-      const num = document.createElement('span');
-      num.className = 'num';
-      num.textContent = n + ' ';
-      $('playersStatus').prepend(num);
+      players = data || [];
+      playersLoaded = true;
+      renderPlayers();
     } catch (err) {
       setPlayersStatus(describeError(err), true);
-      console.error('Pitchside connection check failed:', err);
+      console.error('Pitchside player load failed:', err);
     }
   }
 
+  function initials(name) {
+    const words = String(name || '').trim().split(/\s+/).filter(Boolean);
+    if (!words.length) return '?';
+    const first = words[0].charAt(0);
+    const last = words.length > 1 ? words[words.length - 1].charAt(0) : '';
+    return (first + last).toUpperCase();
+  }
+
+  function renderPlayers() {
+    const isScorer = state.role === 'scorer';
+    $('addPlayerBtn').hidden = !isScorer;
+    if (!playersLoaded) return;
+
+    const list = $('playersList');
+    list.replaceChildren();
+
+    if (!players.length) {
+      const empty = document.createElement('div');
+      empty.className = 'empty';
+      empty.textContent = 'No players yet';
+      list.append(empty);
+    }
+
+    for (const p of players) {
+      const row = document.createElement(isScorer ? 'button' : 'div');
+      row.className = 'player-row';
+      if (isScorer) {
+        row.type = 'button';
+        row.addEventListener('click', () => openPlayerPanel(p));
+      }
+
+      const badge = document.createElement('span');
+      badge.className = 'initials';
+      badge.textContent = initials(p.name);
+
+      const name = document.createElement('span');
+      name.className = 'player-name';
+      name.textContent = p.name;
+
+      row.append(badge, name);
+      if (p.gender === 'F') {
+        const tag = document.createElement('span');
+        tag.className = 'f-tag';
+        tag.textContent = 'F';
+        row.append(tag);
+      }
+      list.append(row);
+    }
+
+    const n = players.length;
+    setPlayersStatus(`${n === 1 ? 'player' : 'players'} in the library`, false);
+    const num = document.createElement('span');
+    num.className = 'num';
+    num.textContent = n + ' ';
+    $('playersStatus').prepend(num);
+  }
+
+  // ---------- Add / edit player panel ----------
+  const playerForm = {
+    editing: null,      // player object when editing, null when adding
+    gender: null,
+    dupAcknowledged: false,
+    busy: false
+  };
+
+  function openPlayerPanel(player) {
+    if (state.role !== 'scorer') return;
+    playerForm.editing = player || null;
+    playerForm.gender = player ? player.gender : null;
+    playerForm.dupAcknowledged = false;
+    playerForm.busy = false;
+    $('playerTitle').textContent = player ? 'Edit player' : 'Add player';
+    $('playerName').value = player ? player.name : '';
+    $('playerDelete').hidden = !player;
+    setPlayerMsg('');
+    $('playerSave').textContent = 'Save';
+    renderPlayerForm();
+    $('playerOverlay').classList.add('open');
+    $('playerName').focus();
+  }
+
+  function closePlayerPanel() {
+    $('playerOverlay').classList.remove('open');
+    playerForm.editing = null;
+    playerForm.busy = false;
+  }
+
+  function setPlayerMsg(text) {
+    $('playerMsg').textContent = text;
+  }
+
+  function renderPlayerForm() {
+    for (const btn of $('playerGender').children) {
+      btn.setAttribute('aria-pressed', String(btn.dataset.gender === playerForm.gender));
+    }
+    const ready = $('playerName').value.trim() !== '' && !!playerForm.gender;
+    $('playerSave').disabled = !ready || playerForm.busy;
+    $('playerDelete').disabled = playerForm.busy;
+  }
+
+  function resetDuplicateWarning() {
+    if (!playerForm.dupAcknowledged) return;
+    playerForm.dupAcknowledged = false;
+    $('playerSave').textContent = 'Save';
+    setPlayerMsg('');
+  }
+
+  async function savePlayer() {
+    if (playerForm.busy) return;
+    const name = $('playerName').value.trim();
+    const gender = playerForm.gender;
+    if (!name || !gender) return;
+
+    if (!playerForm.dupAcknowledged) {
+      const editingId = playerForm.editing && playerForm.editing.id;
+      const lower = name.toLowerCase();
+      const dup = players.find((p) => p.id !== editingId && String(p.name).trim().toLowerCase() === lower);
+      if (dup) {
+        playerForm.dupAcknowledged = true;
+        setPlayerMsg(`Someone called "${name}" already exists. Save anyway?`);
+        $('playerSave').textContent = 'Save anyway';
+        return;
+      }
+    }
+
+    playerForm.busy = true;
+    setPlayerMsg('');
+    renderPlayerForm();
+    try {
+      const table = getClient().from('players');
+      const { error } = playerForm.editing
+        ? await table.update({ name, gender }).eq('id', playerForm.editing.id)
+        : await table.insert({ name, gender });
+      if (error) throw error;
+      closePlayerPanel();
+      await loadPlayers();
+    } catch (err) {
+      playerForm.busy = false;
+      setPlayerMsg(describeError(err));
+      renderPlayerForm();
+      console.error('Pitchside player save failed:', err);
+    }
+  }
+
+  function confirmDeletePlayer() {
+    const player = playerForm.editing;
+    if (!player || playerForm.busy) return;
+    showConfirm({
+      title: 'Delete player?',
+      text: `"${player.name}" will be removed from the library.`,
+      okLabel: 'Delete',
+      onConfirm: () => deletePlayer(player)
+    });
+  }
+
+  async function deletePlayer(player) {
+    playerForm.busy = true;
+    setPlayerMsg('');
+    renderPlayerForm();
+    try {
+      const { error } = await getClient().from('players').delete().eq('id', player.id);
+      if (error) throw error;
+      closePlayerPanel();
+      await loadPlayers();
+    } catch (err) {
+      playerForm.busy = false;
+      setPlayerMsg(err && err.code === FK_VIOLATION
+        ? `${player.name} is in a team and cannot be deleted. Remove them from the team first.`
+        : describeError(err));
+      renderPlayerForm();
+      if (!err || err.code !== FK_VIOLATION) console.error('Pitchside player delete failed:', err);
+    }
+  }
+
+  $('addPlayerBtn').addEventListener('click', () => openPlayerPanel(null));
+  $('playerName').addEventListener('input', () => {
+    resetDuplicateWarning();
+    renderPlayerForm();
+  });
+  $('playerGender').addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-gender]');
+    if (!btn) return;
+    playerForm.gender = btn.dataset.gender;
+    renderPlayerForm();
+  });
+  $('playerSave').addEventListener('click', savePlayer);
+  $('playerCancel').addEventListener('click', closePlayerPanel);
+  $('playerDelete').addEventListener('click', confirmDeletePlayer);
+  $('playerOverlay').addEventListener('click', (e) => { if (e.target === e.currentTarget) closePlayerPanel(); });
+
   // ---------- Init ----------
   renderRole();
-  checkConnection();
+  loadPlayers();
 </script>
 </body>
 </html>
