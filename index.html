@@ -180,6 +180,43 @@
     border-radius: 999px;
   }
 
+  /* ---------- Teams ---------- */
+  .colour-dot {
+    flex: none;
+    width: 34px;
+    height: 34px;
+    border-radius: 50%;
+    border: 1px solid var(--border);
+  }
+  .swatches { display: flex; flex-wrap: wrap; gap: 10px; }
+  .swatch {
+    width: 40px;
+    height: 40px;
+    min-width: 40px;
+    min-height: 40px;
+    padding: 0;
+    border-radius: 50%;
+    border: 2px solid var(--border);
+  }
+  .swatch[aria-pressed="true"] { border-color: var(--text); box-shadow: inset 0 0 0 3px var(--panel); }
+  .squad-picker {
+    max-height: 240px;
+    overflow-y: auto;
+    border: 1px solid var(--border);
+    border-radius: 9px;
+    padding: 0 12px;
+  }
+  .squad-count { font-size: 13px; color: var(--muted); margin: 10px 0 6px; }
+  button.squad-row[aria-pressed="true"] { background: rgba(46, 125, 79, 0.22); }
+  .squad-tick {
+    flex: none;
+    margin-left: auto;
+    color: var(--green);
+    font-weight: 700;
+    visibility: hidden;
+  }
+  button.squad-row[aria-pressed="true"] .squad-tick { visibility: visible; }
+
   /* ---------- Forms ---------- */
   .field-label {
     display: block;
@@ -309,8 +346,12 @@
     </section>
 
     <section class="panel" id="teamsPanel">
-      <h2>Teams</h2>
-      <div class="empty">No teams yet</div>
+      <div class="panel-head">
+        <h2>Teams</h2>
+        <button type="button" id="addTeamBtn" hidden>Add team</button>
+      </div>
+      <div class="player-list" id="teamsList"></div>
+      <div class="panel-foot" id="teamsStatus">Loading teams…</div>
     </section>
 
     <section class="panel" id="matchesPanel">
@@ -374,6 +415,26 @@
   </div>
 </div>
 
+<!-- Add / edit team -->
+<div class="overlay" id="teamOverlay" role="dialog" aria-modal="true" aria-labelledby="teamTitle">
+  <div class="modal" style="max-width:480px">
+    <h3 id="teamTitle">Add team</h3>
+    <label class="field-label" for="teamName">Name</label>
+    <input class="text-input" id="teamName" type="text" autocomplete="off" maxlength="60">
+    <div class="field-label">Colour</div>
+    <div class="swatches" id="teamColours"></div>
+    <div class="field-label">Squad</div>
+    <div class="squad-count" id="teamSquadCount"></div>
+    <div class="squad-picker" id="teamSquad"></div>
+    <div class="form-msg" id="teamMsg" aria-live="polite"></div>
+    <div class="modal-actions">
+      <button type="button" id="teamDelete" class="danger" hidden>Delete</button>
+      <button type="button" id="teamCancel">Cancel</button>
+      <button type="button" id="teamSave" class="primary" disabled>Save</button>
+    </div>
+  </div>
+</div>
+
 <!-- Generic confirm -->
 <div class="overlay" id="confirmOverlay" role="dialog" aria-modal="true" aria-labelledby="confirmTitle">
   <div class="modal" style="max-width:420px">
@@ -421,6 +482,8 @@
     document.body.dataset.role = state.role;
     if (!isScorer) closePlayerPanel();
     renderPlayers();
+    if (!isScorer) closeTeamPanel();
+    renderTeams();
   }
 
   // ---------- PIN entry ----------
@@ -502,6 +565,11 @@
       if (e.key === 'Escape') closeConfirm();
       return;
     }
+    if ($('teamOverlay').classList.contains('open')) {
+      if (e.key === 'Escape') closeTeamPanel();
+      else if (e.key === 'Enter' && e.target === $('teamName') && !$('teamSave').disabled) saveTeam();
+      return;
+    }
     if ($('playerOverlay').classList.contains('open')) {
       if (e.key === 'Escape') closePlayerPanel();
       else if (e.key === 'Enter' && e.target === $('playerName') && !$('playerSave').disabled) savePlayer();
@@ -576,6 +644,7 @@
       players = data || [];
       playersLoaded = true;
       renderPlayers();
+      if (teamsLoaded) renderTeams();
     } catch (err) {
       setPlayersStatus(describeError(err), true);
       console.error('Pitchside player load failed:', err);
@@ -772,9 +841,332 @@
   $('playerDelete').addEventListener('click', confirmDeletePlayer);
   $('playerOverlay').addEventListener('click', (e) => { if (e.target === e.currentTarget) closePlayerPanel(); });
 
+  // ---------- Teams ----------
+  const TEAM_COLOURS = [
+    { hex: '#2563EB', ink: '#FFFFFF', label: 'Blue' },
+    { hex: '#C2410C', ink: '#FFFFFF', label: 'Orange' },
+    { hex: '#0D9488', ink: '#FFFFFF', label: 'Teal' },
+    { hex: '#7C3AED', ink: '#FFFFFF', label: 'Purple' },
+    { hex: '#E0A800', ink: '#141413', label: 'Amber' },
+    { hex: '#DB2777', ink: '#FFFFFF', label: 'Magenta' },
+    { hex: '#15803D', ink: '#FFFFFF', label: 'Green' },
+    { hex: '#E2E8F0', ink: '#141413', label: 'White' }
+  ];
+
+  let teams = [];          // each: { id, name, colour, tournament_id, is_quickplay, memberIds: [playerId] }
+  let teamsLoaded = false;
+
+  function setTeamsStatus(text, isError) {
+    const el = $('teamsStatus');
+    el.textContent = text;
+    el.classList.toggle('error', !!isError);
+  }
+
+  async function loadTeams() {
+    try {
+      const { data, error, status, statusText } = await getClient()
+        .from('teams')
+        .select('id, name, colour, tournament_id, is_quickplay, team_players(player_id)')
+        .order('name', { ascending: true });
+
+      if (error) {
+        const msg = describeError(error);
+        throw new Error(msg === '{}' || !msg ? `Request failed: ${status} ${statusText || ''}`.trim() : msg);
+      }
+
+      teams = (data || []).map((t) => ({
+        id: t.id,
+        name: t.name,
+        colour: t.colour,
+        tournament_id: t.tournament_id,
+        is_quickplay: t.is_quickplay,
+        memberIds: (t.team_players || []).map((tp) => tp.player_id)
+      }));
+      teamsLoaded = true;
+      renderTeams();
+    } catch (err) {
+      setTeamsStatus(describeError(err), true);
+      console.error('Pitchside team load failed:', err);
+    }
+  }
+
+  function countFemales(ids) {
+    let n = 0;
+    for (const id of ids) {
+      const p = players.find((pl) => pl.id === id);
+      if (p && p.gender === 'F') n++;
+    }
+    return n;
+  }
+
+  function renderTeams() {
+    const isScorer = state.role === 'scorer';
+    $('addTeamBtn').hidden = !isScorer;
+    if (!teamsLoaded) return;
+
+    const list = $('teamsList');
+    list.replaceChildren();
+
+    if (!teams.length) {
+      const empty = document.createElement('div');
+      empty.className = 'empty';
+      empty.textContent = 'No teams yet';
+      list.append(empty);
+    }
+
+    for (const t of teams) {
+      const row = document.createElement(isScorer ? 'button' : 'div');
+      row.className = 'player-row';
+      if (isScorer) {
+        row.type = 'button';
+        row.addEventListener('click', () => openTeamPanel(t));
+      }
+
+      const dot = document.createElement('span');
+      dot.className = 'colour-dot';
+      dot.style.background = t.colour;
+
+      const name = document.createElement('span');
+      name.className = 'player-name';
+      name.textContent = t.name;
+
+      row.append(dot, name);
+      if (playersLoaded && countFemales(t.memberIds) === 0) {
+        const tag = document.createElement('span');
+        tag.className = 'f-tag';
+        tag.textContent = 'NO F';
+        row.append(tag);
+      }
+
+      const size = t.memberIds.length;
+      const count = document.createElement('span');
+      count.style.cssText = 'margin-left:auto; color:var(--muted); font-size:13px;';
+      count.textContent = `${size} ${size === 1 ? 'player' : 'players'}`;
+      row.append(count);
+
+      list.append(row);
+    }
+
+    const n = teams.length;
+    setTeamsStatus(`${n === 1 ? 'team' : 'teams'} registered`, false);
+    const num = document.createElement('span');
+    num.className = 'num';
+    num.textContent = n + ' ';
+    $('teamsStatus').prepend(num);
+  }
+
+  // ---------- Add / edit team panel ----------
+  const teamForm = { editing: null, colour: TEAM_COLOURS[0].hex, selected: new Set(), busy: false };
+  let teamColourNote = '';   // the colour-clash warning currently shown, if any
+
+  function openTeamPanel(team) {
+    if (state.role !== 'scorer') return;
+    teamForm.editing = team || null;
+    teamForm.colour = team ? team.colour : TEAM_COLOURS[0].hex;
+    teamForm.selected = new Set(team ? team.memberIds : []);
+    teamForm.busy = false;
+    $('teamTitle').textContent = team ? 'Edit team' : 'Add team';
+    $('teamName').value = team ? team.name : '';
+    $('teamDelete').hidden = !team;
+    setTeamMsg('');
+    $('teamSquad').scrollTop = 0;
+    renderTeamForm();
+    $('teamOverlay').classList.add('open');
+    $('teamName').focus();
+  }
+
+  function closeTeamPanel() {
+    $('teamOverlay').classList.remove('open');
+    teamForm.editing = null;
+    teamForm.busy = false;
+  }
+
+  function setTeamMsg(text) {
+    $('teamMsg').textContent = text;
+    teamColourNote = '';
+  }
+
+  function renderTeamForm() {
+    const swatches = $('teamColours');
+    swatches.replaceChildren();
+    for (const c of TEAM_COLOURS) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'swatch';
+      btn.style.background = c.hex;
+      btn.setAttribute('aria-pressed', String(c.hex === teamForm.colour));
+      btn.setAttribute('aria-label', c.label);
+      btn.title = c.label;
+      btn.addEventListener('click', () => {
+        teamForm.colour = c.hex;
+        renderTeamForm();
+      });
+      swatches.append(btn);
+    }
+
+    const squad = $('teamSquad');
+    const scroll = squad.scrollTop;
+    squad.replaceChildren();
+    if (!players.length) {
+      const empty = document.createElement('div');
+      empty.className = 'empty';
+      empty.textContent = 'No players in the library yet';
+      squad.append(empty);
+    }
+    for (const p of players) {
+      const row = document.createElement('button');
+      row.type = 'button';
+      row.className = 'player-row squad-row';
+      row.setAttribute('aria-pressed', String(teamForm.selected.has(p.id)));
+
+      const badge = document.createElement('span');
+      badge.className = 'initials';
+      badge.textContent = initials(p.name);
+
+      const name = document.createElement('span');
+      name.className = 'player-name';
+      name.textContent = p.name;
+
+      row.append(badge, name);
+      if (p.gender === 'F') {
+        const tag = document.createElement('span');
+        tag.className = 'f-tag';
+        tag.textContent = 'F';
+        row.append(tag);
+      }
+
+      const tick = document.createElement('span');
+      tick.className = 'squad-tick';
+      tick.textContent = '✓';
+      row.append(tick);
+
+      row.addEventListener('click', () => {
+        if (teamForm.selected.has(p.id)) teamForm.selected.delete(p.id);
+        else teamForm.selected.add(p.id);
+        renderTeamForm();
+      });
+      squad.append(row);
+    }
+    squad.scrollTop = scroll;
+
+    const females = countFemales(teamForm.selected);
+    $('teamSquadCount').textContent = `${teamForm.selected.size} selected · ${females} female`;
+
+    // Colour clash is a warning only. Never overwrite a save/delete error with it.
+    if (!teamForm.busy) {
+      const editingId = teamForm.editing && teamForm.editing.id;
+      const clash = teams.find((t) => t.id !== editingId && t.colour === teamForm.colour);
+      const current = $('teamMsg').textContent;
+      if (current === '' || current === teamColourNote) {
+        if (clash) {
+          setTeamMsg(`${clash.name} already uses this colour.`);
+          teamColourNote = $('teamMsg').textContent;
+        } else if (teamColourNote) {
+          setTeamMsg('');
+        }
+      }
+    }
+
+    $('teamSave').disabled = ($('teamName').value.trim() === '') || teamForm.busy;
+    $('teamDelete').disabled = teamForm.busy;
+  }
+
+  async function saveTeam() {
+    if (teamForm.busy) return;
+    const name = $('teamName').value.trim();
+    if (!name) return;
+
+    teamForm.busy = true;
+    renderTeamForm();
+    try {
+      let teamId;
+      let before;
+      if (teamForm.editing) {
+        const { error } = await getClient().from('teams')
+          .update({ name, colour: teamForm.colour })
+          .eq('id', teamForm.editing.id);
+        if (error) throw error;
+        teamId = teamForm.editing.id;
+        before = new Set(teamForm.editing.memberIds);
+      } else {
+        const { data, error } = await getClient().from('teams')
+          .insert({ name, colour: teamForm.colour })
+          .select('id')
+          .single();
+        if (error) throw error;
+        teamId = data.id;
+        before = new Set();
+      }
+
+      const removed = [...before].filter((id) => !teamForm.selected.has(id));
+      const added = [...teamForm.selected].filter((id) => !before.has(id));
+
+      if (removed.length) {
+        const { error } = await getClient().from('team_players')
+          .delete()
+          .eq('team_id', teamId)
+          .in('player_id', removed);
+        if (error) throw error;
+      }
+      if (added.length) {
+        const { error } = await getClient().from('team_players')
+          .insert(added.map((player_id) => ({ team_id: teamId, player_id })));
+        if (error) throw error;
+      }
+
+      closeTeamPanel();
+      await loadTeams();
+    } catch (err) {
+      teamForm.busy = false;
+      setTeamMsg(describeError(err));
+      renderTeamForm();
+      console.error('Pitchside team save failed:', err);
+    }
+  }
+
+  function confirmDeleteTeam() {
+    const team = teamForm.editing;
+    if (!team || teamForm.busy) return;
+    const n = team.memberIds.length;
+    const squad = n === 0 ? 'no players' : `${n} ${n === 1 ? 'player' : 'players'}`;
+    showConfirm({
+      title: 'Delete team?',
+      text: `"${team.name}" and its squad of ${squad} will be removed. The players stay in the library.`,
+      okLabel: 'Delete',
+      onConfirm: () => deleteTeam(team)
+    });
+  }
+
+  async function deleteTeam(team) {
+    teamForm.busy = true;
+    setTeamMsg('');
+    renderTeamForm();
+    try {
+      const { error } = await getClient().from('teams').delete().eq('id', team.id);
+      if (error) throw error;
+      closeTeamPanel();
+      await loadTeams();
+    } catch (err) {
+      teamForm.busy = false;
+      setTeamMsg(err && err.code === FK_VIOLATION
+        ? `${team.name} has played matches and cannot be deleted.`
+        : describeError(err));
+      renderTeamForm();
+      if (!err || err.code !== FK_VIOLATION) console.error('Pitchside team delete failed:', err);
+    }
+  }
+
+  $('addTeamBtn').addEventListener('click', () => openTeamPanel(null));
+  $('teamName').addEventListener('input', renderTeamForm);
+  $('teamSave').addEventListener('click', saveTeam);
+  $('teamCancel').addEventListener('click', closeTeamPanel);
+  $('teamDelete').addEventListener('click', confirmDeleteTeam);
+  $('teamOverlay').addEventListener('click', (e) => { if (e.target === e.currentTarget) closeTeamPanel(); });
+
   // ---------- Init ----------
   renderRole();
   loadPlayers();
+  loadTeams();
 </script>
 </body>
 </html>
