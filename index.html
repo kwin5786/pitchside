@@ -419,7 +419,7 @@
   .clock-half { font-size: 9px; font-weight: 700; letter-spacing: 0.1em; color: var(--muted); margin-top: 2px; }
   .warn-line { min-height: 16px; font-size: 11px; color: var(--amber); text-align: center; }
   .pitch {
-    flex: 1; min-height: 180px; display: flex; gap: 0; position: relative;
+    flex: 1; min-height: 240px; display: flex; gap: 0; position: relative;
     background: #1B6B3A; border-radius: 10px; overflow: hidden;
   }
   .pitch::before {
@@ -431,23 +431,21 @@
     border: 2px solid rgba(255,255,255,0.22); border-radius: 50%;
     transform: translate(-50%, -50%);
   }
-  .pitch-half {
-    flex: 1; background: none; border: 0; border-radius: 0; position: relative;
-    display: flex; align-items: center; justify-content: space-around;
-    padding: 10px 8px; gap: 4px;
-    flex-wrap: wrap; align-content: center;   /* larger sides wrap instead of being clipped */
-  }
+  .pitch-half { flex: 1; position: relative; background: none; border: 0; border-radius: 0; }
   .pitch-half.left::before, .pitch-half.right::before {
     content: ""; position: absolute; top: 50%; width: 46px; height: 120px;
     border: 2px solid rgba(255,255,255,0.22); transform: translateY(-50%);
   }
   .pitch-half.left::before { left: 0; border-left: 0; }
   .pitch-half.right::before { right: 0; border-right: 0; }
-  .pitch-player { display: flex; flex-direction: column; align-items: center; gap: 3px; width: 56px; }
+  .pitch-player {
+    position: absolute; transform: translate(-50%, -50%);
+    display: flex; flex-direction: column; align-items: center; gap: 3px;
+    width: 64px; z-index: 1;
+  }
   .pitch-player .initials { width: 38px; height: 38px; }
   .pitch-player .pname { font-size: 10px; text-align: center; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 56px; }
   .pitch-player.keeper .initials { border: 2px solid var(--amber); }
-  .pitch-player { position: relative; z-index: 1; width: 62px; }
   .pitch-player .initials { width: 44px; height: 44px; font-size: 16px; border: 2px solid rgba(255,255,255,0.35); }
   .pitch-player .pname { font-size: 11px; color: #fff; text-shadow: 0 1px 2px rgba(0,0,0,0.6); max-width: 62px; }
   .badge-wrap { position: relative; }
@@ -1888,7 +1886,11 @@
 
       const count = document.createElement('span');
       count.className = 'lineup-count' + (n !== size ? ' over' : '');
-      count.textContent = `${n} of ${size} on pitch`;
+      count.textContent = `${n} of ${size} on pitch` + (n === size ? ' — full' : '');
+
+      // The picker caps each side at the match type; the match screen only warns.
+      const pickedCount = () => side.squad.filter((p) => lineup.picked.has(p.id)).length;
+      const atCap = () => pickedCount() >= size;
 
       head.append(dot, name, count);
       block.append(head);
@@ -1901,6 +1903,7 @@
         row.type = 'button';
         row.className = 'player-row squad-row';
         row.setAttribute('aria-pressed', String(lineup.picked.has(p.id)));
+        row.disabled = !lineup.picked.has(p.id) && n >= size;
 
         const badge = document.createElement('span');
         badge.className = 'initials';
@@ -1928,6 +1931,7 @@
           if (lineup.keepers[side.id] === p.id) {
             delete lineup.keepers[side.id];
           } else {
+            if (!lineup.picked.has(p.id) && atCap()) return;
             lineup.keepers[side.id] = p.id;
             lineup.picked.add(p.id);
           }
@@ -1940,6 +1944,7 @@
             lineup.picked.delete(p.id);
             if (lineup.keepers[side.id] === p.id) delete lineup.keepers[side.id];
           } else {
+            if (atCap()) return;
             lineup.picked.add(p.id);
           }
           renderLineup();
@@ -2182,6 +2187,20 @@
     if (error) throw error;
   }
 
+  // Outfield [left%, top%] for the LEFT half, keyed by outfield count; the right half mirrors left.
+  const FORMATIONS = {
+    1: [[55, 50]],
+    2: [[45, 30], [45, 70]],
+    3: [[38, 25], [38, 50], [38, 75]],
+    4: [[34, 25], [34, 75], [62, 25], [62, 75]],
+    5: [[32, 20], [32, 50], [32, 80], [62, 32], [62, 68]],
+    6: [[30, 18], [30, 50], [30, 82], [60, 25], [60, 50], [60, 75]],
+    7: [[28, 15], [28, 38], [28, 62], [28, 85], [58, 25], [58, 50], [58, 75]],
+    8: [[26, 15], [26, 38], [26, 62], [26, 85], [56, 20], [56, 43], [56, 67], [56, 88]],
+    9: [[24, 12], [24, 31], [24, 50], [24, 69], [24, 88], [55, 20], [55, 40], [55, 60], [55, 80]],
+    10: [[22, 12], [22, 31], [22, 50], [22, 69], [22, 88], [54, 15], [54, 35], [54, 50], [54, 65], [54, 85]]
+  };
+
   // Team A plays left unless team_a_side says right; the four positional slots follow it.
   function sideTeamIds() {
     const m = liveMatch;
@@ -2237,13 +2256,19 @@
       const ink = swatch ? swatch.ink : '#fff';
       s.pitchEl.replaceChildren();
       s.pitchEl.className = 'pitch-half ' + (s.right ? 'right' : 'left');
-      // Keepers sit at the outer edge, nearest their own goal.
-      const ordered = s.onPitch.filter((r) => !r.is_keeper);
-      const keepers = s.onPitch.filter((r) => r.is_keeper);
-      const pitchOrder = s.right ? [...ordered, ...keepers] : [...keepers, ...ordered];
-      for (const r of pitchOrder) {
+      // Keeper first, then outfield players in their existing order, each placed from FORMATIONS.
+      const keeper = s.onPitch.find((r) => r.is_keeper) || null;
+      const outfield = s.onPitch.filter((r) => r !== keeper);
+      const slots = FORMATIONS[Math.min(outfield.length, 10)] || [];
+      const placed = [];
+      if (keeper) placed.push([keeper, [12, 50]]);
+      outfield.forEach((r, idx) => placed.push([r, slots[Math.min(idx, slots.length - 1)]]));
+
+      for (const [r, [left, top]] of placed) {
         const pp = document.createElement(canSub ? 'button' : 'div');
         pp.className = 'pitch-player' + (r.is_keeper ? ' keeper' : '');
+        pp.style.left = (s.right ? 100 - left : left) + '%';
+        pp.style.top = top + '%';
         if (canSub) {
           pp.type = 'button';
           pp.addEventListener('click', () => openSub(r));
