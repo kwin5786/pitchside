@@ -409,6 +409,17 @@
   .pitch-player.keeper .initials { border: 2px solid var(--amber); }
   .match-controls { display: flex; gap: 8px; }
   .match-controls button { flex: 1; }
+  .event-row { display: flex; gap: 6px; }
+  .event-row button { flex: 1; flex-direction: column; gap: 2px; min-height: 52px; font-size: 11px; font-weight: 700; letter-spacing: 0.04em; display: flex; align-items: center; justify-content: center; }
+  .event-row button .ico { font-size: 17px; line-height: 1; }
+  .event-bar { display: flex; gap: 6px; }
+  .event-row { flex: 1; display: flex; gap: 6px; min-width: 0; }
+  .event-row button { min-width: 0; }
+  .log-row { display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 8px 0; }
+  .log-row + .log-row { border-top: 1px solid var(--border); }
+  .log-time { flex: none; width: 46px; font-family: 'Barlow Condensed', sans-serif; font-weight: 700; color: var(--muted); }
+  .log-text { min-width: 0; flex: 1; }
+  .log-del { flex: none; min-height: 32px; min-width: 32px; padding: 0 10px; font-size: 11px; color: var(--amber); }
 </style>
 </head>
 <body>
@@ -538,7 +549,12 @@
         <div class="pitch-half" id="pitchA"></div>
         <div class="pitch-half" id="pitchB"></div>
       </div>
+      <div class="event-bar">
+        <div class="event-row" id="eventRowA"></div>
+        <div class="event-row" id="eventRowB"></div>
+      </div>
       <div class="match-controls" id="matchControls"></div>
+      <button type="button" id="openLogBtn" hidden>Event log</button>
       <div class="panel-foot" id="matchStatus"></div>
     </section>
   </main>
@@ -625,6 +641,31 @@
     <div class="squad-picker" id="teamPickList"></div>
     <div class="modal-actions">
       <button type="button" id="teamPickCancel">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- Match event entry -->
+<div class="overlay" id="eventOverlay" role="dialog" aria-modal="true" aria-labelledby="eventTitle">
+  <div class="modal" style="max-width:460px">
+    <h3 id="eventTitle"></h3>
+    <div id="eventStep"></div>
+    <div class="form-msg" id="eventMsg" aria-live="polite"></div>
+    <div class="modal-actions">
+      <button type="button" id="eventSkip" hidden>Skip</button>
+      <button type="button" id="eventCancel">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- Event log -->
+<div class="overlay" id="logOverlay" role="dialog" aria-modal="true" aria-labelledby="logTitle">
+  <div class="modal" style="max-width:520px">
+    <h3 id="logTitle">Event log</h3>
+    <div class="squad-picker" id="logList"></div>
+    <div class="form-msg" id="logMsg" aria-live="polite"></div>
+    <div class="modal-actions">
+      <button type="button" id="logClose">Close</button>
     </div>
   </div>
 </div>
@@ -758,6 +799,14 @@
   document.addEventListener('keydown', (e) => {
     if ($('confirmOverlay').classList.contains('open')) {
       if (e.key === 'Escape') closeConfirm();
+      return;
+    }
+    if ($('logOverlay').classList.contains('open')) {
+      if (e.key === 'Escape') $('logOverlay').classList.remove('open');
+      return;
+    }
+    if ($('eventOverlay').classList.contains('open')) {
+      if (e.key === 'Escape') closeEvent();
       return;
     }
     if ($('teamPickOverlay').classList.contains('open')) {
@@ -1935,6 +1984,9 @@
       livePlayers = (data || [])
         .map((r) => ({ ...r, player: players.find((p) => p.id === r.player_id) }))
         .filter((r) => r.player);
+
+      liveEvents = [];
+      await loadEvents();
     } catch (err) {
       setMatchStatus(describeError(err), true);
       console.error('Pitchside match open failed:', err);
@@ -1954,8 +2006,8 @@
     const m = liveMatch;
     const size = Number(m.match_type);
     const sides = [
-      { teamId: m.team_a_id, sideEl: $('matchSideA'), pitchEl: $('pitchA'), right: false },
-      { teamId: m.team_b_id, sideEl: $('matchSideB'), pitchEl: $('pitchB'), right: true }
+      { teamId: m.team_a_id, sideEl: $('matchSideA'), pitchEl: $('pitchA'), eventEl: $('eventRowA'), right: false },
+      { teamId: m.team_b_id, sideEl: $('matchSideB'), pitchEl: $('pitchB'), eventEl: $('eventRowB'), right: true }
     ];
     for (const s of sides) {
       s.team = teamById(s.teamId);
@@ -1973,7 +2025,7 @@
 
       const score = document.createElement('span');
       score.className = 'score';
-      score.textContent = '0';
+      score.textContent = String(scoreFor(s.teamId));
 
       const name = document.createElement('span');
       name.className = 'team-name';
@@ -2014,8 +2066,26 @@
       if (!s.onPitch.some((r) => r.player.gender === 'F')) {
         warnings.push(`${s.name} — no female player on pitch`);
       }
+
+      s.eventEl.replaceChildren();
+      if (m.status === 'live') {
+        for (const [type, label, ico] of EVENT_BUTTONS) {
+          const btn = document.createElement('button');
+          btn.type = 'button';
+          btn.setAttribute('aria-label', `${label} — ${s.name}`);
+          const icon = document.createElement('span');
+          icon.className = 'ico';
+          icon.textContent = ico;
+          const text = document.createElement('span');
+          text.textContent = label.toUpperCase();
+          btn.append(icon, text);
+          btn.addEventListener('click', () => startEvent(s.teamId, type));
+          s.eventEl.append(btn);
+        }
+      }
     });
     $('matchWarn').textContent = warnings.join(' · ');
+    $('openLogBtn').hidden = !['live', 'halftime', 'finished'].includes(m.status);
 
     const controls = $('matchControls');
     controls.replaceChildren();
@@ -2101,6 +2171,299 @@
       onConfirm: () => patchMatch({ status: 'finished', is_running: false, paused_secs: elapsedSecs(liveMatch) })
     });
   }
+
+  // ---------- Match events ----------
+  let liveEvents = [];
+  const eventFlow = { team: null, type: null, step: null, data: {}, busy: false };
+
+  const EVENT_BUTTONS = [
+    ['goal', 'Goal', '⚽'],
+    ['save', 'Save', '🧤'],
+    ['foul', 'Foul', '📣'],
+    ['card', 'Card', '🟨']
+  ];
+
+  async function loadEvents() {
+    try {
+      const { data, error } = await getClient()
+        .from('match_events')
+        .select('id, team_id, player_id, assist_player_id, event_type, detail, clock_secs, created_at')
+        .eq('match_id', liveMatch.id)
+        .order('clock_secs', { ascending: true })
+        .order('created_at', { ascending: true });
+      if (error) throw error;
+      liveEvents = data || [];
+      renderMatch();
+    } catch (err) {
+      setMatchStatus(describeError(err), true);
+      console.error('Pitchside event load failed:', err);
+    }
+  }
+
+  // A normal goal counts for its team_id; an own goal counts for the other team.
+  function scoreFor(teamId) {
+    const otherId = teamId === liveMatch.team_a_id ? liveMatch.team_b_id : liveMatch.team_a_id;
+    return liveEvents.filter((e) => {
+      if (e.event_type !== 'goal') return false;
+      const own = String(e.detail || '').includes('own');
+      return own ? e.team_id === otherId : e.team_id === teamId;
+    }).length;
+  }
+
+  function playerName(id) {
+    const p = players.find((pl) => pl.id === id);
+    return p ? p.name : 'Unknown';
+  }
+
+  function eventText(e) {
+    const who = playerName(e.player_id);
+    if (e.event_type === 'goal') {
+      let text = `${who} — goal`;
+      if (String(e.detail || '').includes('own')) text += ' (own goal)';
+      if (e.assist_player_id) text += ` · assist ${playerName(e.assist_player_id)}`;
+      if (e.detail === 'penalty') text += ' · penalty';
+      if (e.detail === 'freekick') text += ' · free kick';
+      return text;
+    }
+    if (e.event_type === 'save') return `${who} — save`;
+    if (e.event_type === 'foul') return `${who} — foul`;
+    if (e.event_type === 'card') return `${who} — ${e.detail} card`;
+    return `${who} — ${e.event_type}`;
+  }
+
+  function startEvent(teamId, type) {
+    if (state.role !== 'scorer' || !liveMatch || liveMatch.status !== 'live') return;
+    eventFlow.team = teamId;
+    eventFlow.type = type;
+    eventFlow.step = null;
+    eventFlow.data = {};
+    eventFlow.busy = false;
+    $('eventMsg').textContent = '';
+    eventFlow.step = { goal: 'how', save: 'confirmSave', foul: 'who', card: 'cardType' }[type];
+    renderEventStep();
+    $('eventOverlay').classList.add('open');
+  }
+
+  function onPitchOf(teamId) {
+    return livePlayers
+      .filter((r) => r.team_id === teamId && r.on_pitch)
+      .map((r) => r.player)
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  function eventPlayerRow(p, onPick) {
+    const row = document.createElement('button');
+    row.type = 'button';
+    row.className = 'player-row';
+
+    const badge = document.createElement('span');
+    badge.className = 'initials';
+    badge.textContent = initials(p.name);
+
+    const name = document.createElement('span');
+    name.className = 'player-name';
+    name.textContent = p.name;
+
+    row.append(badge, name);
+    if (p.gender === 'F') {
+      const tag = document.createElement('span');
+      tag.className = 'f-tag';
+      tag.textContent = 'F';
+      row.append(tag);
+    }
+    row.disabled = eventFlow.busy;
+    row.addEventListener('click', onPick);
+    return row;
+  }
+
+  function eventChoice(label, onPick, className) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = className || 'toggle';
+    btn.textContent = label;
+    btn.disabled = eventFlow.busy;
+    btn.addEventListener('click', onPick);
+    return btn;
+  }
+
+  function eventPlayerList(list, onPick) {
+    const wrap = document.createElement('div');
+    wrap.className = 'squad-picker';
+    for (const p of list) wrap.append(eventPlayerRow(p, () => onPick(p)));
+    if (!list.length) {
+      const empty = document.createElement('div');
+      empty.className = 'empty';
+      empty.textContent = 'No players on pitch';
+      wrap.append(empty);
+    }
+    return wrap;
+  }
+
+  function renderEventStep() {
+    const step = $('eventStep');
+    step.replaceChildren();
+    $('eventSkip').hidden = true;
+    const f = eventFlow;
+
+    if (f.step === 'how') {
+      $('eventTitle').textContent = 'Goal — step 1 of 3';
+      const seg = document.createElement('div');
+      seg.className = 'seg';
+      for (const [label, detail] of [['Open play', 'open'], ['Penalty', 'penalty'], ['Free kick', 'freekick'], ['Own goal', 'own']]) {
+        seg.append(eventChoice(label, () => {
+          f.data.detail = detail;
+          f.step = 'who';
+          renderEventStep();
+        }));
+      }
+      step.append(seg);
+    } else if (f.step === 'who') {
+      $('eventTitle').textContent = f.type === 'goal' ? 'Goal — step 2 of 3'
+        : f.type === 'foul' ? 'Foul — who?'
+        : 'Card — who?';
+      // Own goal: the player who put it in their own net belongs to f.team; scoreFor credits the other side.
+      step.append(eventPlayerList(onPitchOf(f.team), (p) => {
+        f.data.player_id = p.id;
+        if (f.type === 'goal' && f.data.detail === 'open') {
+          f.step = 'assist';
+          renderEventStep();
+        } else {
+          commitEvent();
+        }
+      }));
+    } else if (f.step === 'assist') {
+      $('eventTitle').textContent = 'Goal — step 3 of 3';
+      $('eventSkip').hidden = false;
+      $('eventSkip').disabled = f.busy;
+      const list = onPitchOf(f.team).filter((p) => p.id !== f.data.player_id);
+      step.append(eventPlayerList(list, (p) => {
+        f.data.assist_player_id = p.id;
+        commitEvent();
+      }));
+    } else if (f.step === 'cardType') {
+      $('eventTitle').textContent = 'Card';
+      const seg = document.createElement('div');
+      seg.className = 'seg';
+      for (const [label, detail] of [['Yellow', 'yellow'], ['Red', 'red']]) {
+        seg.append(eventChoice(label, () => {
+          f.data.detail = detail;
+          f.step = 'who';
+          renderEventStep();
+        }));
+      }
+      step.append(seg);
+    } else if (f.step === 'confirmSave') {
+      $('eventTitle').textContent = 'Save';
+      const keeperRow = livePlayers.find((r) => r.team_id === f.team && r.is_keeper);
+      if (keeperRow) {
+        const p = document.createElement('p');
+        p.textContent = keeperRow.player.name;
+        step.append(p, eventChoice('Add save', () => {
+          f.data.player_id = keeperRow.player.id;
+          commitEvent();
+        }, 'primary'));
+      } else {
+        step.append(eventPlayerList(onPitchOf(f.team), (p) => {
+          f.data.player_id = p.id;
+          commitEvent();
+        }));
+      }
+    }
+  }
+
+  async function commitEvent() {
+    if (eventFlow.busy) return;
+    eventFlow.busy = true;
+    renderEventStep();
+    try {
+      const { error } = await getClient().from('match_events').insert({
+        match_id: liveMatch.id,
+        team_id: eventFlow.team,
+        player_id: eventFlow.data.player_id || null,
+        assist_player_id: eventFlow.data.assist_player_id || null,
+        event_type: eventFlow.type,
+        detail: eventFlow.data.detail || null,
+        clock_secs: elapsedSecs(liveMatch)
+      });
+      if (error) throw error;
+      closeEvent();
+      await loadEvents();
+    } catch (err) {
+      eventFlow.busy = false;
+      renderEventStep();
+      $('eventMsg').textContent = describeError(err);
+      console.error('Pitchside event save failed:', err);
+    }
+  }
+
+  function closeEvent() {
+    $('eventOverlay').classList.remove('open');
+    eventFlow.busy = false;
+  }
+
+  function openLog() {
+    const list = $('logList');
+    list.replaceChildren();
+    for (const e of [...liveEvents].reverse()) {
+      const row = document.createElement('div');
+      row.className = 'log-row';
+
+      const time = document.createElement('span');
+      time.className = 'log-time';
+      time.textContent = formatClock(e.clock_secs || 0);
+
+      const text = document.createElement('span');
+      text.className = 'log-text';
+      text.textContent = eventText(e);
+
+      row.append(time, text);
+      if (state.role === 'scorer') {
+        const del = document.createElement('button');
+        del.type = 'button';
+        del.className = 'log-del';
+        del.textContent = 'Delete';
+        del.addEventListener('click', () => confirmDeleteEvent(e));
+        row.append(del);
+      }
+      list.append(row);
+    }
+    if (!liveEvents.length) {
+      const empty = document.createElement('div');
+      empty.className = 'empty';
+      empty.textContent = 'No events yet';
+      list.append(empty);
+    }
+    $('logMsg').textContent = '';
+    $('logOverlay').classList.add('open');
+  }
+
+  function confirmDeleteEvent(e) {
+    showConfirm({
+      title: 'Delete event?',
+      text: eventText(e) + ' will be removed.',
+      okLabel: 'Delete',
+      onConfirm: () => deleteEvent(e)
+    });
+  }
+
+  async function deleteEvent(e) {
+    try {
+      const { error } = await getClient().from('match_events').delete().eq('id', e.id);
+      if (error) throw error;
+      await loadEvents();
+      openLog();
+    } catch (err) {
+      $('logMsg').textContent = describeError(err);
+      console.error('Pitchside event delete failed:', err);
+    }
+  }
+
+  $('openLogBtn').addEventListener('click', openLog);
+  $('logClose').addEventListener('click', () => $('logOverlay').classList.remove('open'));
+  $('logOverlay').addEventListener('click', (e) => { if (e.target === e.currentTarget) $('logOverlay').classList.remove('open'); });
+  $('eventCancel').addEventListener('click', closeEvent);
+  $('eventSkip').addEventListener('click', () => commitEvent());
+  $('eventOverlay').addEventListener('click', (e) => { if (e.target === e.currentTarget) closeEvent(); });
 
   // ---------- Screen router ----------
   const SCREENS = { launch: 'screenLaunch', players: 'screenPlayers', teams: 'screenTeams', matchSetup: 'screenMatchSetup', lineup: 'screenLineup', match: 'screenMatch' };
