@@ -3727,6 +3727,10 @@
       closeMenu();
       openLog();
     });
+    add(soundOn ? 'Sound: on' : 'Sound: off', () => {
+      closeMenu();
+      setSound(!soundOn);
+    });
     if (state.role === 'scorer' && ['live', 'halftime', 'shootout'].includes(liveMatch.status)) {
       add('Abandon match', () => {
         closeMenu();
@@ -4186,6 +4190,73 @@
   $('eventSkip').addEventListener('click', () => commitEvent());
   $('eventOverlay').addEventListener('click', (e) => { if (e.target === e.currentTarget) closeEvent(); });
 
+  // ---------- Sounds ----------
+  // One clip per animation kind; a kind with no entry stays silent.
+  // Off until switched on from the match menu; the choice is remembered on this device.
+  const SOUND_KEY = 'pitchside_sound';
+  const SOUNDS = { goal: 'sounds/goal.mp3' };
+  let soundOn = storageGet(SOUND_KEY) === '1';
+  let soundEl = null;
+  let soundUnlocked = false;
+
+  // Phones only let a page play audio after a tap. This starts the clip muted inside a tap,
+  // which allows the later plays that happen after a save has finished.
+  function unlockSound() {
+    if (!soundOn || soundUnlocked) return;
+    if (soundEl && !soundEl.paused && !soundEl.muted) return;
+    try {
+      if (!soundEl) soundEl = new Audio();
+      soundEl.muted = true;
+      soundEl.src = SOUNDS.goal;
+      const started = soundEl.play();
+      soundUnlocked = true;
+      if (started && started.then) {
+        started.then(() => {
+          if (soundEl.muted) {
+            soundEl.pause();
+            soundEl.muted = false;
+          }
+        }).catch(() => {
+          if (soundEl.muted) {
+            soundEl.muted = false;
+            soundUnlocked = false;
+          }
+        });
+      }
+    } catch (e) { /* audio unavailable */ }
+  }
+
+  function stopSound() {
+    if (soundEl && !soundEl.paused) soundEl.pause();
+  }
+
+  // A new event always cuts off whatever was playing, even when the new event has no clip.
+  function playSound(kind) {
+    stopSound();
+    const src = SOUNDS[kind];
+    if (!soundOn || !src) return;
+    try {
+      if (!soundEl) soundEl = new Audio();
+      soundEl.muted = false;
+      soundEl.src = src;
+      const started = soundEl.play();
+      if (started && started.catch) started.catch(() => {});
+    } catch (e) { /* audio unavailable */ }
+  }
+
+  function setSound(on) {
+    soundOn = on;
+    if (on) {
+      storageSet(SOUND_KEY, '1');
+      unlockSound();
+    } else {
+      storageRemove(SOUND_KEY);
+      stopSound();
+    }
+  }
+
+  document.addEventListener('pointerdown', unlockSound, { passive: true });
+
   // ---------- Event animations ----------
   // Played over the pitch after an event is saved. Never blocks a tap (pointer-events: none).
   const FX = {
@@ -4215,6 +4286,7 @@
     const ms = def.ms || 1800;
     clearTimeout(fxTimer);
     box.replaceChildren();
+    playSound(kind);
 
     if (def.confetti) {
       const colours = ['#E0A800', '#F2F5F3', '#5DCAA5', '#F0997B', '#AFA9EC'];
@@ -4327,7 +4399,10 @@
   let currentScreen = 'launch';
 
   function showScreen(name) {
-    if (name !== 'match') stopClockTimer();
+    if (name !== 'match') {
+      stopClockTimer();
+      stopSound();
+    }
     currentScreen = name;
     document.body.dataset.screen = name;
     for (const key of Object.keys(SCREENS)) {
