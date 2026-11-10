@@ -592,6 +592,43 @@
   button.squad-row[aria-pressed="true"] .keeper-btn { background: #FFFFFF; border-color: #141413; color: #141413; }
   button.squad-row[aria-pressed="true"] .keeper-btn[aria-pressed="true"] { background: var(--amber); border-color: #141413; color: #141413; }
   button.squad-row[aria-pressed="true"] .captain-btn[aria-pressed="true"] { background: #141413; border-color: #141413; color: #FFFFFF; }
+  /* ---------- Event animations ---------- */
+  .fx { position: absolute; inset: 0; z-index: 5; pointer-events: none; overflow: hidden; display: flex; align-items: center; justify-content: center; text-align: center; color: #fff; }
+  .fx-wrap { display: flex; flex-direction: column; align-items: center; gap: 6px; max-width: 92%; padding: 10px 18px; border-radius: 14px; background: rgba(5, 9, 7, 0.86); animation: fxOut 0.3s both; animation-delay: var(--fx-out, 1.5s); }
+  .fx-ico { font-size: 44px; line-height: 1; }
+  .fx-title { font-family: 'Barlow Condensed', 'Barlow', sans-serif; font-weight: 700; font-size: 30px; line-height: 1.15; letter-spacing: 0.04em; padding: 0 16px; border-radius: 999px; background: #F2F5F3; color: #141413; animation: fxPop 0.5s both; }
+  .fx-line { font-size: 15px; font-weight: 600; animation: fxFade 0.5s 0.2s both; }
+  .fx-who { font-size: 12px; color: #D5DED9; animation: fxFade 0.5s 0.3s both; }
+  .fx-conf { position: absolute; left: 50%; top: 45%; width: 8px; height: 8px; border-radius: 2px; animation: fxConf 1.1s both; }
+  .fx-a-fly { animation: fxFly 0.6s both; }
+  .fx-a-wob { animation: fxWob 0.7s both; }
+  .fx-a-pop { animation: fxPop 0.45s both; }
+  .fx-a-shk { animation: fxShake 0.5s 2; }
+  .fx-a-flip { animation: fxFlip 0.6s both; }
+  .fx-a-slam { animation: fxSlam 0.45s both; }
+  .fx-a-spin { animation: fxSpin 0.8s both; }
+  .fx-a-up { animation: fxUp 0.9s both; }
+  .pitch.fx-shake { animation: fxShake 0.45s; }
+  @keyframes fxFly { from { transform: translateX(-300px) rotate(-540deg); } to { transform: none; } }
+  @keyframes fxWob { 0% { transform: scale(0.3); } 40% { transform: scale(1.1) rotate(-14deg); } 70% { transform: rotate(12deg); } 100% { transform: none; } }
+  @keyframes fxPop { 0% { transform: scale(0.2); opacity: 0; } 70% { transform: scale(1.15); opacity: 1; } 100% { transform: none; } }
+  @keyframes fxShake { 0%, 100% { transform: none; } 20%, 60% { transform: translateX(-7px); } 40%, 80% { transform: translateX(7px); } }
+  @keyframes fxFlip { from { transform: translateY(50px) rotateY(180deg); opacity: 0; } to { transform: none; opacity: 1; } }
+  @keyframes fxSlam { 0% { transform: translateY(-200px) scale(1.6); } 75% { transform: translateY(8px) scale(0.95); } 100% { transform: none; } }
+  @keyframes fxSpin { from { transform: rotate(-360deg) scale(0.4); } to { transform: none; } }
+  @keyframes fxUp { 0% { transform: translate(-80px, 40px); } 100% { transform: translate(120px, -160px) rotate(400deg); opacity: 0.2; } }
+  @keyframes fxFade { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+  @keyframes fxOut { to { opacity: 0; transform: scale(0.9); } }
+  @keyframes fxConf { 0% { transform: translate(0, 0); opacity: 1; } 100% { transform: translate(var(--dx), var(--dy)) rotate(540deg); opacity: 0; } }
+  @media (orientation: landscape) and (max-height: 520px) {
+    .fx-wrap { gap: 2px; padding: 6px 14px; }
+    .fx-ico { font-size: 30px; }
+    .fx-title { font-size: 22px; }
+    .fx-line { font-size: 13px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .fx *, .pitch.fx-shake { animation: none !important; }
+  }
 </style>
 </head>
 <body>
@@ -759,6 +796,7 @@
         <div class="pitch-half" id="pitchA"></div>
         <div class="pitch-half" id="pitchB"></div>
         <div class="bin-strip" id="binB"></div>
+        <div class="fx" id="matchFx"></div>
       </div>
       <div class="event-bar">
         <div class="event-row" id="eventRowA"></div>
@@ -3204,6 +3242,8 @@
       if (error) throw error;
       Object.assign(liveMatch, fields);
       setMatchStatus('', false);
+      if (fields.status === 'finished') whistleFx('full');
+      else if (fields.status === 'halftime' && liveMatch.current_half === 1) whistleFx('half');
     } catch (err) {
       setMatchStatus(describeError(err), true);
       console.error('Pitchside match update failed:', err);
@@ -3634,6 +3674,7 @@
       // openArmband replaces subFlow and keeps the overlay open, so closeSub is skipped on that path.
       if (out.is_captain) openArmband(out.team_id);
       else closeSub();
+      showFx('sub', { who: `${inRow.player.name} on for ${out.player.name}` });
     } catch (err) {
       subFlow.busy = false;
       renderSubList();
@@ -4006,6 +4047,7 @@
     eventFlow.busy = true;
     const { type, team } = eventFlow;
     const playerId = eventFlow.data.player_id;
+    const detail = eventFlow.data.detail;
     renderEventStep();
     try {
       const { error } = await getClient().from('match_events').insert({
@@ -4020,8 +4062,12 @@
       });
       if (error) throw error;
       closeEvent();
+      if (type !== 'card') eventFx(type, detail, team, playerId);
       await loadEvents();
-      if (type === 'card') await applyCardConsequence(playerId, team);
+      if (type === 'card') {
+        await applyCardConsequence(playerId, team);
+        eventFx(type, detail, team, playerId);
+      }
     } catch (err) {
       eventFlow.busy = false;
       renderEventStep();
@@ -4139,6 +4185,123 @@
   $('eventCancel').addEventListener('click', closeEvent);
   $('eventSkip').addEventListener('click', () => commitEvent());
   $('eventOverlay').addEventListener('click', (e) => { if (e.target === e.currentTarget) closeEvent(); });
+
+  // ---------- Event animations ----------
+  // Played over the pitch after an event is saved. Never blocks a tap (pointer-events: none).
+  const FX = {
+    goal: { ico: '⚽', title: 'GOAL!', anim: 'fly', confetti: true, lines: ['Back of the net', 'The keeper is still looking for it', 'Somebody check the net for holes'] },
+    own: { ico: '🤦', title: 'OWN GOAL', anim: 'wob', lines: ['Wrong net, boss', 'Scoring for both teams today', 'A gift, nicely wrapped'] },
+    save: { ico: '🧤', title: 'SAVE!', anim: 'pop', lines: ['Not today', 'Hands of glue', 'Access denied'] },
+    foul: { ico: '📣', title: 'FOUL!', anim: 'shk', lines: ['Oi, referee', 'That tackle was from 1998', 'Football, not kabaddi'] },
+    yellow: { ico: '🟨', title: 'YELLOW CARD', anim: 'flip', bg: '#E0A800', lines: ['Booked. Behave', 'Name taken, noted', 'First warning'] },
+    yellowBin: { ico: '🟨⏱️', title: 'YELLOW CARD', anim: 'flip', bg: '#E0A800', lines: ['Naughty step, 1 minute', 'Go think about what you did', 'Short tea break'] },
+    yellowOff: { ico: '🟨👋', title: 'YELLOW CARD', anim: 'slam', bg: '#E0A800', shake: true, lines: ['Early shower', 'Meeting ended for you', 'Logged out'] },
+    red: { ico: '🟥', title: 'RED CARD', anim: 'slam', bg: '#DC2626', ink: '#fff', shake: true, lines: ['Naughty step, 1 minute', 'Go think about what you did', 'Short tea break'] },
+    redBin: { ico: '🟥⏱️', title: 'RED CARD', anim: 'slam', bg: '#DC2626', ink: '#fff', shake: true, lines: ['Naughty step, 1 minute', 'Go think about what you did', 'Short tea break'] },
+    redOff: { ico: '🟥👋', title: 'RED CARD', anim: 'slam', bg: '#DC2626', ink: '#fff', shake: true, lines: ['Early shower', 'Meeting ended for you', 'Logged out'] },
+    sub: { ico: '🔁', title: 'SUBSTITUTION', anim: 'spin', lines: ['Fresh legs', 'Tag, you are in', 'Battery swap'] },
+    penIn: { ico: '⚽', title: 'SCORED', anim: 'fly', confetti: true, lines: ['Ice cold', 'Never in doubt', 'Sent the keeper for coffee'] },
+    penOut: { ico: '🙈', title: 'MISSED', anim: 'up', lines: ['Row Z', 'Still rising', 'Somebody fetch the ball'] },
+    half: { ico: '🍊', title: 'HALF TIME', anim: 'pop', ms: 2600, lines: ['Oranges, anyone?', 'Water, gossip, tactics', 'Catch your breath'] },
+    full: { ico: '🏁', title: 'FULL TIME', anim: 'pop', ms: 2600, confetti: true, lines: ['That is all, folks', 'Handshakes, then snacks', 'Back to your desks'] }
+  };
+  let fxTimer = null;
+
+  function showFx(kind, opts) {
+    const def = FX[kind];
+    const box = $('matchFx');
+    if (!def || !box) return;
+    const o = opts || {};
+    const ms = def.ms || 1800;
+    clearTimeout(fxTimer);
+    box.replaceChildren();
+
+    if (def.confetti) {
+      const colours = ['#E0A800', '#F2F5F3', '#5DCAA5', '#F0997B', '#AFA9EC'];
+      for (let i = 0; i < 16; i++) {
+        const angle = Math.random() * Math.PI * 2;
+        const dist = 90 + Math.random() * 110;
+        const bit = document.createElement('span');
+        bit.className = 'fx-conf';
+        bit.style.background = colours[i % colours.length];
+        bit.style.setProperty('--dx', Math.round(Math.cos(angle) * dist) + 'px');
+        bit.style.setProperty('--dy', Math.round(Math.sin(angle) * dist) + 'px');
+        box.append(bit);
+      }
+    }
+
+    const wrap = document.createElement('div');
+    wrap.className = 'fx-wrap';
+    wrap.style.setProperty('--fx-out', (ms - 300) + 'ms');
+
+    const ico = document.createElement('div');
+    ico.className = 'fx-ico fx-a-' + def.anim;
+    ico.textContent = def.ico;
+
+    const title = document.createElement('div');
+    title.className = 'fx-title';
+    title.textContent = def.title;
+    const bg = o.colour || def.bg;
+    if (bg) {
+      title.style.background = bg;
+      title.style.color = o.ink || def.ink || '#141413';
+    }
+
+    const line = document.createElement('div');
+    line.className = 'fx-line';
+    line.textContent = def.lines[Math.floor(Math.random() * def.lines.length)];
+
+    wrap.append(ico, title, line);
+    if (o.who) {
+      const who = document.createElement('div');
+      who.className = 'fx-who';
+      who.textContent = o.who;
+      wrap.append(who);
+    }
+    box.append(wrap);
+
+    const pitch = box.parentElement;
+    pitch.classList.remove('fx-shake');
+    if (def.shake) {
+      void pitch.offsetWidth; // restart animation
+      pitch.classList.add('fx-shake');
+    }
+    fxTimer = setTimeout(() => box.replaceChildren(), ms);
+  }
+
+  // Picks the animation for a saved match event. For a card it reads the player's row after
+  // the consequence has been applied, so the wording follows whatever the card rule decided.
+  function eventFx(type, detail, teamId, playerId) {
+    const team = teamById(teamId);
+    const swatch = team ? TEAM_COLOURS.find((c) => c.hex === team.colour) : null;
+    const tint = team ? { colour: team.colour, ink: swatch ? swatch.ink : '#fff' } : {};
+    const name = playerId ? playerName(playerId) : '';
+    if (type === 'goal') {
+      if (String(detail || '').includes('own')) showFx('own', { who: name });
+      else showFx('goal', { who: name, ...tint });
+    } else if (type === 'pen') {
+      if (detail === 'scored') showFx('penIn', { who: name, ...tint });
+      else showFx('penOut', { who: name });
+    } else if (type === 'card') {
+      const row = livePlayers.find((r) => r.player_id === playerId && r.team_id === teamId);
+      const outcome = row && row.sent_off ? 'Off' : row && binSecsLeft(row) !== null ? 'Bin' : '';
+      const note = outcome === 'Off' ? ' · sent off' : outcome === 'Bin' ? ' · sin bin, 1 minute' : '';
+      showFx((detail === 'red' ? 'red' : 'yellow') + outcome, { who: name + note });
+    } else if (type === 'save' || type === 'foul') {
+      showFx(type, { who: name });
+    }
+  }
+
+  // Half time and full time, with the score line.
+  function whistleFx(kind) {
+    const a = teamById(liveMatch.team_a_id);
+    const b = teamById(liveMatch.team_b_id);
+    let who = `${a ? a.name : 'Unknown team'} ${scoreFor(liveMatch.team_a_id)} – ${scoreFor(liveMatch.team_b_id)} ${b ? b.name : 'Unknown team'}`;
+    if (kind === 'full' && liveEvents.some((e) => e.event_type === 'pen')) {
+      who += ` · pens ${pensFor(liveMatch.team_a_id)} – ${pensFor(liveMatch.team_b_id)}`;
+    }
+    showFx(kind, { who });
+  }
 
   // ---------- Splash ----------
   function closeSplash() {
