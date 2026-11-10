@@ -1731,15 +1731,24 @@
         if (done.length) {
           const { data: goals, error: goalsError } = await getClient()
             .from('match_events')
-            .select('match_id, team_id, detail')
-            .eq('event_type', 'goal')
+            .select('match_id, team_id, event_type, detail')
+            .in('event_type', ['goal', 'pen'])
             .in('match_id', done.map((m) => m.id));
           if (goalsError) throw goalsError;
-          for (const m of done) scores[m.id] = { a: 0, b: 0 };
+          for (const m of done) scores[m.id] = { a: 0, b: 0, pa: 0, pb: 0, pens: false };
           // Same rule as scoreFor(): an own goal counts for the other team.
           for (const g of goals || []) {
             const m = done.find((d) => d.id === g.match_id);
             if (!m) continue;
+            if (g.event_type === 'pen') {
+              // Shootout kicks are tallied apart and never added to the match score.
+              scores[m.id].pens = true;
+              if (g.detail === 'scored') {
+                if (g.team_id === m.team_a_id) scores[m.id].pa += 1;
+                else if (g.team_id === m.team_b_id) scores[m.id].pb += 1;
+              }
+              continue;
+            }
             const own = String(g.detail || '').includes('own');
             const forA = own ? g.team_id === m.team_b_id : g.team_id === m.team_a_id;
             const forB = own ? g.team_id === m.team_a_id : g.team_id === m.team_b_id;
@@ -1789,7 +1798,7 @@
       if (state.role === 'scorer') {
         btn.addEventListener('click', () => {
           if (m.status === 'setup') openLineup(m);
-          else if (m.status === 'ready' || m.status === 'live' || m.status === 'halftime') openMatch(m);
+          else if (['ready', 'live', 'halftime', 'shootout'].includes(m.status)) openMatch(m);
         });
       } else {
         btn.disabled = true;
@@ -1799,7 +1808,7 @@
       head.className = 'match-card-head';
       head.textContent = m.status === 'setup' ? 'UP NEXT'
         : m.status === 'ready' ? 'READY'
-        : 'LIVE NOW';   // live, halftime
+        : 'LIVE NOW';   // live, halftime, shootout
 
       const teamsRow = document.createElement('div');
       teamsRow.className = 'match-card-teams';
@@ -1851,8 +1860,9 @@
         : `${teamA ? teamA.name : 'Unknown team'} v ${teamB ? teamB.name : 'Unknown team'}`;
 
       const status = document.createElement('span');
-      status.style.cssText = 'margin-left:auto; color:var(--muted); font-size:13px;';
-      status.textContent = m.status === 'finished' ? 'Full time'
+      status.style.cssText = 'margin-left:auto; color:var(--muted); font-size:13px; white-space:nowrap;';
+      status.textContent = m.status === 'finished' && score && score.pens ? `Pens ${score.pa} – ${score.pb}`
+        : m.status === 'finished' ? 'Full time'
         : m.status === 'abandoned' ? 'Abandoned'
         : String(m.status || '').charAt(0).toUpperCase() + String(m.status || '').slice(1);
 
@@ -2178,7 +2188,9 @@
   }
 
   function periodLength(m) {
-    return m.current_half === 2 ? m.second_half_secs : m.first_half_secs;
+    return m.current_half === 3 ? m.extra_secs
+      : m.current_half === 2 ? m.second_half_secs
+      : m.first_half_secs;
   }
 
   // While running: elapsed = now - half_started_at - paused_secs.
@@ -2197,16 +2209,19 @@
     return `${m}:${String(s).padStart(2, '0')}`;
   }
 
-  function periodLabel(p) { return p === 2 ? '2H' : p === 3 ? 'ET' : '1H'; }
+  function periodLabel(p) { return p === 2 ? '2H' : p === 3 ? 'ET' : p === 4 ? 'PEN' : '1H'; }
 
   function renderClock() {
     if (!liveMatch) return;
     const secs = elapsedSecs(liveMatch);
     $('clockTime').textContent = formatClock(secs);
     $('clockTime').classList.toggle('over', secs > periodLength(liveMatch));
-    $('clockHalf').textContent = liveMatch.status === 'halftime' ? 'HALF TIME'
+    $('clockHalf').textContent = liveMatch.status === 'halftime' && liveMatch.current_half === 2 ? 'BEFORE EXTRA TIME'
+      : liveMatch.status === 'halftime' ? 'HALF TIME'
+      : liveMatch.status === 'shootout' ? 'PENALTIES'
       : liveMatch.status === 'finished' ? 'FULL TIME'
       : liveMatch.status === 'abandoned' ? 'ABANDONED'
+      : liveMatch.current_half === 3 ? 'EXTRA TIME'
       : liveMatch.current_half === 2 ? '2ND HALF'
       : '1ST HALF';
     renderBreakClock();
@@ -2214,11 +2229,11 @@
   }
 
   // Ticks while live (clock and bin countdowns, which run on wall time even when paused)
-  // and at half time (break countdown).
+  // and at half time (break countdown). A shootout ticks too, only to keep the screen awake.
   function startClockTimer() {
     if (clockTimer) clearInterval(clockTimer);
     clockTimer = null;
-    if (liveMatch && (liveMatch.status === 'live' || liveMatch.status === 'halftime')) {
+    if (liveMatch && ['live', 'halftime', 'shootout'].includes(liveMatch.status)) {
       clockTimer = setInterval(renderClock, 250);
     }
     setAwake(clockTimer !== null);
@@ -2258,7 +2273,8 @@
 
   function renderBreakClock() {
     const el = $('breakClock');
-    if (!liveMatch || liveMatch.status !== 'halftime') {
+    // The pause before extra time (halftime with current_half 2) has no countdown.
+    if (!liveMatch || liveMatch.status !== 'halftime' || liveMatch.current_half === 2) {
       el.hidden = true;
       return;
     }
@@ -2295,7 +2311,7 @@
       // The launch list only carries summary columns; the clock needs the full row.
       const { data: row, error: matchError } = await getClient()
         .from('matches')
-        .select('id, status, match_type, team_a_id, team_b_id, created_at, first_half_secs, break_secs, second_half_secs, current_half, half_started_at, paused_secs, is_running, team_a_side')
+        .select('id, status, match_type, team_a_id, team_b_id, created_at, first_half_secs, break_secs, second_half_secs, current_half, half_started_at, paused_secs, is_running, team_a_side, extra_secs')
         .eq('id', match.id)
         .single();
       if (matchError) throw matchError;
@@ -2434,6 +2450,14 @@
       dot.style.background = s.colour;
 
       s.sideEl.append(score, name, dot);
+      if (m.status === 'shootout' || liveEvents.some((e) => e.event_type === 'pen')) {
+        const pens = document.createElement('span');
+        pens.style.cssText = 'font-size:12px; color:var(--muted);';
+        const so = shootoutState();
+        const taken = s.teamId === m.team_a_id ? so.ka : so.kb;
+        pens.textContent = m.status === 'shootout' ? `(${pensFor(s.teamId)}/${taken})` : `(${pensFor(s.teamId)})`;
+        score.after(pens);
+      }
       if (s.onPitch.length < size) {
         const tag = document.createElement('span');
         tag.className = 'short-tag';
@@ -2535,10 +2559,37 @@
           btn.addEventListener('click', () => startEvent(s.teamId, type));
           s.eventEl.append(btn);
         }
+      } else if (m.status === 'shootout' && state.role === 'scorer') {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.setAttribute('aria-label', `Penalty — ${s.name}`);
+        if (s.colour) {
+          btn.style.background = s.colour;
+          btn.style.borderColor = s.colour;
+          btn.style.color = ink;
+        }
+        const icon = document.createElement('span');
+        icon.className = 'ico';
+        icon.textContent = '⚽';
+        const text = document.createElement('span');
+        text.textContent = 'PENALTY';
+        btn.append(icon, text);
+        btn.disabled = !shootoutState().canKick(s.teamId);
+        btn.addEventListener('click', () => startEvent(s.teamId, 'pen'));
+        s.eventEl.append(btn);
       }
     });
+    if (m.status === 'shootout') {
+      const so = shootoutState();
+      if (so.decided) {
+        const winner = teamById(so.sa > so.sb ? m.team_a_id : m.team_b_id);
+        warnings.push(`${winner ? winner.name : 'Unknown team'} lead ${Math.max(so.sa, so.sb)} – ${Math.min(so.sa, so.sb)} — tap End shootout`);
+      } else if (so.level) {
+        warnings.push(`Level after ${so.ka} kicks each — one more kick each, or end as draw`);
+      }
+    }
     $('matchWarn').textContent = warnings.join(' · ');
-    $('openLogBtn').hidden = !['live', 'halftime', 'finished', 'abandoned'].includes(m.status);
+    $('openLogBtn').hidden = !['live', 'halftime', 'shootout', 'finished', 'abandoned'].includes(m.status);
     $('swapSidesBtn').hidden = !['ready', 'live', 'halftime'].includes(m.status);
     $('barPauseBtn').hidden = m.status !== 'live';
     $('barPauseBtn').textContent = m.is_running ? '❚❚' : '▶';
@@ -2569,10 +2620,24 @@
         setMatchStatus('', false);
       }
     } else if (m.status === 'live') {
-      if (m.current_half === 2) addControl('Full time', goFullTime, false);
+      if (m.current_half === 3) addControl('End extra time', goFullTime, false);
+      else if (m.current_half === 2) addControl('Full time', goFullTime, false);
       else addControl('Half time', goHalfTime, false);
     } else if (m.status === 'halftime') {
-      addControl('Start second half', startSecondHalf, true);
+      if (m.current_half === 2) addControl('Start extra time', startExtraTime, true);
+      else addControl('Start second half', startSecondHalf, true);
+    } else if (m.status === 'shootout') {
+      const so = shootoutState();
+      if (so.decided) {
+        addControl('End shootout', endShootout, true);
+      } else if (so.level) {
+        addControl('End as draw', () => showConfirm({
+          title: 'End as a draw?',
+          text: `The shootout is level at ${so.sa} – ${so.sb}. The match is recorded as a draw.`,
+          okLabel: 'End as draw',
+          onConfirm: () => patchMatch({ status: 'finished', is_running: false })
+        }), false);
+      }
     } else if (m.status === 'finished' || m.status === 'abandoned') {
       addControl('Back to launch', () => showScreen('launch'), false);
     }
@@ -2621,6 +2686,25 @@
     }
   }
 
+  // Freeze running bins so they do not tick down through a break. Throws on error.
+  async function freezeBins() {
+    for (const r of livePlayers) {
+      if (r.sent_off || !r.sin_bin_until) continue;
+      await updateMatchPlayer(r.player_id, { sin_bin_secs_left: binSecsLeft(r), sin_bin_until: null });
+    }
+  }
+
+  // Restart frozen bins from where they stopped. Throws on error.
+  async function resumeBins() {
+    for (const r of livePlayers) {
+      if (r.sin_bin_secs_left === null || r.sin_bin_secs_left === undefined) continue;
+      await updateMatchPlayer(r.player_id, {
+        sin_bin_until: new Date(nowMs() + r.sin_bin_secs_left * 1000).toISOString(),
+        sin_bin_secs_left: null
+      });
+    }
+  }
+
   async function goHalfTime() {
     showConfirm({
       title: 'End the first half?',
@@ -2628,12 +2712,8 @@
       okLabel: 'Half time',
       onConfirm: async () => {
         const paused = elapsedSecs(liveMatch);
-        // Freeze running bins so they do not tick down through the break.
         try {
-          for (const r of livePlayers) {
-            if (r.sent_off || !r.sin_bin_until) continue;
-            await updateMatchPlayer(r.player_id, { sin_bin_secs_left: binSecsLeft(r), sin_bin_until: null });
-          }
+          await freezeBins();
         } catch (err) {
           setMatchStatus(describeError(err), true);
           console.error('Pitchside bin freeze failed:', err);
@@ -2647,15 +2727,8 @@
   }
 
   async function startSecondHalf() {
-    // Restart frozen bins from where they stopped.
     try {
-      for (const r of livePlayers) {
-        if (r.sin_bin_secs_left === null || r.sin_bin_secs_left === undefined) continue;
-        await updateMatchPlayer(r.player_id, {
-          sin_bin_until: new Date(nowMs() + r.sin_bin_secs_left * 1000).toISOString(),
-          sin_bin_secs_left: null
-        });
-      }
+      await resumeBins();
     } catch (err) {
       setMatchStatus(describeError(err), true);
       console.error('Pitchside bin resume failed:', err);
@@ -2668,11 +2741,81 @@
   }
 
   async function goFullTime() {
+    if (scoreFor(liveMatch.team_a_id) === scoreFor(liveMatch.team_b_id)) {
+      // Level: nothing is finished yet; the scorer picks what happens next.
+      eventFlow.team = null;
+      eventFlow.type = 'level';
+      eventFlow.step = 'level';
+      eventFlow.data = {};
+      eventFlow.busy = false;
+      $('eventMsg').textContent = '';
+      renderEventStep();
+      $('eventOverlay').classList.add('open');
+      return;
+    }
     showConfirm({
       title: 'End the match?',
       text: 'The clock stops and the result is final.',
       okLabel: 'Full time',
       onConfirm: () => patchMatch({ status: 'finished', is_running: false, paused_secs: elapsedSecs(liveMatch) })
+    });
+  }
+
+  // Level after the second half: a pause, then one period of extra time. current_half stays 2 until it starts.
+  async function chooseExtraTime(mins) {
+    closeEvent();
+    const paused = elapsedSecs(liveMatch);
+    try {
+      await freezeBins();
+    } catch (err) {
+      setMatchStatus(describeError(err), true);
+      console.error('Pitchside bin freeze failed:', err);
+      return;
+    }
+    await patchMatch({ status: 'halftime', is_running: false, paused_secs: paused, half_started_at: new Date().toISOString(), extra_secs: mins * 60 });
+    await refreshLivePlayers();
+  }
+
+  function chooseShootout() {
+    closeEvent();
+    patchMatch({ status: 'shootout', is_running: false, paused_secs: elapsedSecs(liveMatch) });
+  }
+
+  function chooseDraw() {
+    closeEvent();
+    showConfirm({
+      title: 'End as a draw?',
+      text: 'The match ends level and the result is final.',
+      okLabel: 'End as draw',
+      onConfirm: () => patchMatch({ status: 'finished', is_running: false, paused_secs: elapsedSecs(liveMatch) })
+    });
+  }
+
+  async function startExtraTime() {
+    try {
+      await resumeBins();
+    } catch (err) {
+      setMatchStatus(describeError(err), true);
+      console.error('Pitchside bin resume failed:', err);
+      return;
+    }
+    // Sides stay as they are for extra time.
+    await patchMatch({ status: 'live', current_half: 3, half_started_at: new Date().toISOString(), paused_secs: 0, is_running: true });
+    await refreshLivePlayers();
+  }
+
+  function endShootout() {
+    const a = teamById(liveMatch.team_a_id);
+    const b = teamById(liveMatch.team_b_id);
+    const pa = pensFor(liveMatch.team_a_id);
+    const pb = pensFor(liveMatch.team_b_id);
+    const winner = pa > pb ? a : b;
+    const text = `${winner ? winner.name : 'Unknown team'} win ${Math.max(pa, pb)} – ${Math.min(pa, pb)} on penalties.`;
+    showConfirm({
+      title: 'End the shootout?',
+      text,
+      okLabel: 'End shootout',
+      onConfirm: () => patchMatch({ status: 'finished', is_running: false })
     });
   }
 
@@ -2993,7 +3136,7 @@
       closeMenu();
       openLog();
     });
-    if (state.role === 'scorer' && (liveMatch.status === 'live' || liveMatch.status === 'halftime')) {
+    if (state.role === 'scorer' && ['live', 'halftime', 'shootout'].includes(liveMatch.status)) {
       add('Abandon match', () => {
         closeMenu();
         const a = teamById(liveMatch.team_a_id);
@@ -3070,6 +3213,34 @@
     }).length;
   }
 
+  // Shootout kicks scored by a team. These never count as match goals.
+  function pensFor(teamId) {
+    return liveEvents.filter((e) => e.event_type === 'pen' && e.team_id === teamId && e.detail === 'scored').length;
+  }
+
+  // Shootout position, derived only from the 'pen' events: best of five each, then sudden death.
+  function shootoutState() {
+    const aId = liveMatch.team_a_id;
+    const bId = liveMatch.team_b_id;
+    const pens = liveEvents.filter((e) => e.event_type === 'pen');
+    const ka = pens.filter((e) => e.team_id === aId).length;
+    const kb = pens.filter((e) => e.team_id === bId).length;
+    const sa = pensFor(aId);
+    const sb = pensFor(bId);
+    // Inside the first five: decided once a lead is bigger than the other side's remaining kicks.
+    const decided = ka < 5 || kb < 5
+      ? sa > sb + Math.max(0, 5 - kb) || sb > sa + Math.max(0, 5 - ka)
+      : ka === kb && sa !== sb;
+    const level = ka === kb && ka >= 5 && sa === sb;
+    const canKick = (teamId) => {
+      if (decided) return false;
+      const kx = teamId === aId ? ka : kb;
+      const ky = teamId === aId ? kb : ka;
+      return kx < 5 || kx <= ky;
+    };
+    return { ka, kb, sa, sb, decided, level, canKick };
+  }
+
   function playerName(id) {
     const p = players.find((pl) => pl.id === id);
     return p ? p.name : 'Unknown';
@@ -3088,19 +3259,23 @@
     if (e.event_type === 'save') return `${who} — save`;
     if (e.event_type === 'foul') return `${who} — foul`;
     if (e.event_type === 'card') return `${who} — ${e.detail} card`;
+    if (e.event_type === 'pen') return `${who} — penalty ${e.detail}`;
     if (e.event_type === 'sub') return `${who} on for ${playerName(e.assist_player_id)}`;
     return `${who} — ${e.event_type}`;
   }
 
   function startEvent(teamId, type) {
-    if (state.role !== 'scorer' || !liveMatch || liveMatch.status !== 'live') return;
+    if (state.role !== 'scorer' || !liveMatch) return;
+    // Shootout kicks are only taken in a shootout; everything else needs a live match.
+    if (liveMatch.status !== (type === 'pen' ? 'shootout' : 'live')) return;
+    if (type === 'pen' && !shootoutState().canKick(teamId)) return;
     eventFlow.team = teamId;
     eventFlow.type = type;
     eventFlow.step = null;
     eventFlow.data = {};
     eventFlow.busy = false;
     $('eventMsg').textContent = '';
-    eventFlow.step = { goal: 'how', save: 'confirmSave', foul: 'who', card: 'cardType' }[type];
+    eventFlow.step = { goal: 'how', save: 'confirmSave', foul: 'who', card: 'cardType', pen: 'penWho' }[type];
     renderEventStep();
     $('eventOverlay').classList.add('open');
   }
@@ -3166,7 +3341,51 @@
     $('eventSkip').hidden = true;
     const f = eventFlow;
 
-    if (f.step === 'how') {
+    if (f.step === 'level') {
+      $('eventTitle').textContent = 'Scores level — what next?';
+      const stack = document.createElement('div');
+      stack.style.cssText = 'display:flex; flex-direction:column; gap:8px;';
+      if (liveMatch.current_half === 2) {
+        stack.append(eventChoice('Extra time — 5 min', () => chooseExtraTime(5)));
+        stack.append(eventChoice('Extra time — 10 min', () => chooseExtraTime(10)));
+      }
+      stack.append(eventChoice('Penalty shootout', chooseShootout));
+      stack.append(eventChoice('End as draw', chooseDraw));
+      step.append(stack);
+    } else if (f.step === 'penWho') {
+      $('eventTitle').textContent = 'Penalty — who takes it?';
+      // Anyone not sent off can take a kick, on the pitch or on the bench.
+      const takers = livePlayers
+        .filter((r) => r.team_id === f.team && !r.sent_off)
+        .map((r) => r.player)
+        .sort((a, b) => a.name.localeCompare(b.name));
+      // Rotation: nobody takes another kick until every eligible team-mate has caught up.
+      const kicks = (id) => liveEvents.filter((e) => e.event_type === 'pen' && e.team_id === f.team && e.player_id === id).length;
+      const min = Math.min(...takers.map((p) => kicks(p.id)));
+      const wrap = eventPlayerList(takers, (p) => {
+        if (kicks(p.id) !== min) return;
+        f.data.player_id = p.id;
+        f.step = 'penResult';
+        renderEventStep();
+      });
+      takers.forEach((p, i) => {
+        if (kicks(p.id) === min) return;
+        wrap.children[i].disabled = true;
+        wrap.children[i].style.opacity = '0.45';
+      });
+      step.append(wrap);
+    } else if (f.step === 'penResult') {
+      $('eventTitle').textContent = 'Penalty — result';
+      const seg = document.createElement('div');
+      seg.className = 'seg';
+      for (const [label, detail] of [['Scored', 'scored'], ['Missed', 'missed']]) {
+        seg.append(eventChoice(label, () => {
+          f.data.detail = detail;
+          commitEvent();
+        }));
+      }
+      step.append(seg);
+    } else if (f.step === 'how') {
       $('eventTitle').textContent = 'Goal — step 1 of 3';
       const seg = document.createElement('div');
       seg.className = 'seg';
@@ -3246,8 +3465,8 @@
         assist_player_id: eventFlow.data.assist_player_id || null,
         event_type: eventFlow.type,
         detail: eventFlow.data.detail || null,
-        clock_secs: elapsedSecs(liveMatch),
-        period: liveMatch.current_half || 1
+        clock_secs: type === 'pen' ? 0 : elapsedSecs(liveMatch),
+        period: type === 'pen' ? 4 : liveMatch.current_half || 1
       });
       if (error) throw error;
       closeEvent();
@@ -3316,7 +3535,7 @@
 
       const time = document.createElement('span');
       time.className = 'log-time';
-      time.textContent = `${periodLabel(e.period)} ${formatClock(e.clock_secs || 0)}`;
+      time.textContent = e.period === 4 ? 'PEN' : `${periodLabel(e.period)} ${formatClock(e.clock_secs || 0)}`;
 
       const text = document.createElement('span');
       text.className = 'log-text';
