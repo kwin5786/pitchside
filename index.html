@@ -177,6 +177,8 @@
     padding: 0 10px; font-size: 11px; font-weight: 700; border-radius: 999px;
   }
   .keeper-btn[aria-pressed="true"] { background: var(--amber); border-color: var(--amber); color: #141413; }
+  .captain-btn { margin-left: 6px; }
+  .captain-btn[aria-pressed="true"] { background: #F2F5F3; border-color: #F2F5F3; color: #141413; }
 
   .panel {
     background: var(--panel);
@@ -419,7 +421,7 @@
   .clock-half { font-size: 9px; font-weight: 700; letter-spacing: 0.1em; color: var(--muted); margin-top: 2px; }
   .warn-line { min-height: 16px; font-size: 11px; color: var(--amber); text-align: center; }
   .pitch {
-    flex: 1; min-height: 240px; display: flex; gap: 0; position: relative;
+    flex: 1; min-height: 290px; display: flex; gap: 0; position: relative;
     background: #1B6B3A; border-radius: 10px; overflow: hidden;
   }
   .pitch::before {
@@ -456,13 +458,18 @@
   }
   .badge-tag.gk { background: #141413; color: #fff; }
   .badge-tag.f { background: #F2F5F3; color: #141413; }
+  .badge-tag.c { top: -2px; bottom: auto; background: var(--amber); color: #141413; }
   .pitch-player.keeper { align-self: center; }
   .bar-pause { flex: none; min-width: 46px; min-height: 42px; padding: 0; font-size: 15px; }
   .match-controls { display: flex; gap: 8px; }
   .match-controls button { flex: 1; }
+  .match-foot { display: flex; gap: 8px; }
+  .match-foot .match-controls { flex: 1; min-width: 0; }
+  .match-foot #openLogBtn { flex: 1; min-width: 0; }
+  .match-foot #openLogBtn[hidden] { display: none; }
   .event-row { display: flex; gap: 6px; }
-  .event-row button { flex: 1; flex-direction: column; gap: 2px; min-height: 52px; font-size: 11px; font-weight: 700; letter-spacing: 0.04em; display: flex; align-items: center; justify-content: center; }
-  .event-row button .ico { font-size: 17px; line-height: 1; }
+  .event-row button { flex: 1; flex-direction: column; gap: 2px; min-height: 66px; font-size: 12px; font-weight: 700; letter-spacing: 0.04em; display: flex; align-items: center; justify-content: center; }
+  .event-row button .ico { font-size: 21px; line-height: 1; }
   .event-bar { display: flex; gap: 6px; }
   .event-row { flex: 1; display: flex; gap: 6px; min-width: 0; }
   .event-row button { min-width: 0; }
@@ -644,8 +651,10 @@
         <div class="event-row" id="eventRowA"></div>
         <div class="event-row" id="eventRowB"></div>
       </div>
-      <div class="match-controls" id="matchControls"></div>
-      <button type="button" id="openLogBtn" hidden>Event log</button>
+      <div class="match-foot">
+        <div class="match-controls" id="matchControls"></div>
+        <button type="button" id="openLogBtn" hidden>Event log</button>
+      </div>
       <div class="panel-foot" id="matchStatus"></div>
     </section>
   </main>
@@ -768,6 +777,7 @@
     <div class="squad-picker" id="subList"></div>
     <div class="form-msg" id="subMsg" aria-live="polite"></div>
     <div class="modal-actions">
+      <button type="button" id="subCaptain" hidden>Make captain</button>
       <button type="button" id="subKeeper" hidden>Make keeper</button>
       <button type="button" id="subCancel">Cancel</button>
     </div>
@@ -1810,8 +1820,8 @@
   $('createMatchBtn').addEventListener('click', createMatch);
 
   // ---------- Line-up ----------
-  const lineup = { match: null, picked: new Set(), keepers: {}, busy: false };
-  // picked holds player ids starting on pitch; keepers maps team_id -> player id
+  const lineup = { match: null, picked: new Set(), keepers: {}, captains: {}, busy: false };
+  // picked holds player ids starting on pitch; keepers and captains map team_id -> player id
 
   async function openLineup(match) {
     if (state.role !== 'scorer') return;
@@ -1819,6 +1829,7 @@
     lineup.busy = false;
     lineup.picked = new Set();
     lineup.keepers = {};
+    lineup.captains = {};
     $('lineupMsg').textContent = '';
     $('lineupStatus').textContent = '';
     $('lineupStatus').className = 'panel-foot';
@@ -1826,12 +1837,13 @@
     try {
       const { data, error } = await getClient()
         .from('match_players')
-        .select('player_id, team_id, on_pitch, is_keeper')
+        .select('player_id, team_id, on_pitch, is_keeper, is_captain')
         .eq('match_id', match.id);
       if (error) throw error;
       for (const row of data || []) {
         if (row.on_pitch) lineup.picked.add(row.player_id);
         if (row.is_keeper) lineup.keepers[row.team_id] = row.player_id;
+        if (row.is_captain) lineup.captains[row.team_id] = row.player_id;
       }
     } catch (err) {
       $('lineupStatus').textContent = describeError(err);
@@ -1864,7 +1876,7 @@
 
     const container = $('lineupTeams');
     container.replaceChildren();
-    const warnings = { count: [], keeper: [], female: [] };
+    const warnings = { count: [], keeper: [], captain: [], female: [] };
 
     for (const side of sides) {
       const onPitch = side.squad.filter((p) => lineup.picked.has(p.id));
@@ -1939,10 +1951,29 @@
         });
         row.append(gk);
 
+        const cap = document.createElement('button');
+        cap.type = 'button';
+        cap.className = 'keeper-btn captain-btn';
+        cap.textContent = 'C';
+        cap.setAttribute('aria-pressed', String(lineup.captains[side.id] === p.id));
+        cap.addEventListener('click', (e) => {
+          e.stopPropagation();
+          if (lineup.captains[side.id] === p.id) {
+            delete lineup.captains[side.id];
+          } else {
+            if (!lineup.picked.has(p.id) && atCap()) return;
+            lineup.captains[side.id] = p.id;
+            lineup.picked.add(p.id);
+          }
+          renderLineup();
+        });
+        row.append(cap);
+
         row.addEventListener('click', () => {
           if (lineup.picked.has(p.id)) {
             lineup.picked.delete(p.id);
             if (lineup.keepers[side.id] === p.id) delete lineup.keepers[side.id];
+            if (lineup.captains[side.id] === p.id) delete lineup.captains[side.id];
           } else {
             if (atCap()) return;
             lineup.picked.add(p.id);
@@ -1964,17 +1995,21 @@
 
       if (n !== size) warnings.count.push(`${side.name}: ${n} of ${size}`);
       if (!lineup.keepers[side.id]) warnings.keeper.push(`${side.name}: no keeper`);
+      if (!lineup.captains[side.id]) warnings.captain.push(`${side.name}: no captain`);
       if (!onPitch.some((p) => p.gender === 'F')) warnings.female.push(`${side.name}: no female player`);
     }
 
-    $('lineupMsg').textContent = [...warnings.count, ...warnings.keeper, ...warnings.female].join(' · ');
-    $('saveLineupBtn').disabled = lineup.busy || lineup.picked.size === 0;
+    const missing = sides.some((side) => !lineup.keepers[side.id] || !lineup.captains[side.id]);
+    $('lineupMsg').textContent = (missing ? 'Pick a keeper and a captain for both teams before saving. ' : '')
+      + [...warnings.count, ...warnings.keeper, ...warnings.captain, ...warnings.female].join(' · ');
+    $('saveLineupBtn').disabled = lineup.busy || lineup.picked.size === 0 || missing;
   }
 
   async function saveLineup() {
     if (state.role !== 'scorer') return;
     if (lineup.busy) return;
     const m = lineup.match;
+    if ([m.team_a_id, m.team_b_id].some((teamId) => !lineup.keepers[teamId] || !lineup.captains[teamId])) return;
 
     lineup.busy = true;
     renderLineup();
@@ -1993,7 +2028,8 @@
             player_id: p.id,
             team_id: teamId,
             on_pitch: lineup.picked.has(p.id),
-            is_keeper: lineup.keepers[teamId] === p.id
+            is_keeper: lineup.keepers[teamId] === p.id,
+            is_captain: lineup.captains[teamId] === p.id
           });
         }
       }
@@ -2170,7 +2206,7 @@
   async function reloadLivePlayers() {
     const { data, error } = await getClient()
       .from('match_players')
-      .select('player_id, team_id, on_pitch, is_keeper, sin_bin_until, sin_bin_secs_left, sent_off')
+      .select('player_id, team_id, on_pitch, is_keeper, is_captain, sin_bin_until, sin_bin_secs_left, sent_off')
       .eq('match_id', liveMatch.id);
     if (error) throw error;
     livePlayers = (data || [])
@@ -2205,6 +2241,20 @@
   function sideTeamIds() {
     const m = liveMatch;
     return m.team_a_side === 'right' ? [m.team_b_id, m.team_a_id] : [m.team_a_id, m.team_b_id];
+  }
+
+  // Names what each side still needs before kick-off. Empty array means ready.
+  function kickOffBlockers() {
+    if (!liveMatch) return [];
+    const out = [];
+    for (const teamId of [liveMatch.team_a_id, liveMatch.team_b_id]) {
+      const team = teamById(teamId);
+      const name = team ? team.name : 'Unknown team';
+      const onPitch = sideOf(teamId).filter((r) => r.on_pitch);
+      if (!onPitch.some((r) => r.is_keeper)) out.push(`${name} — no keeper`);
+      if (!onPitch.some((r) => r.is_captain)) out.push(`${name} — no captain`);
+    }
+    return out;
   }
 
   function renderMatch() {
@@ -2296,6 +2346,12 @@
           f.textContent = 'F';
           wrap.append(f);
         }
+        if (r.is_captain) {
+          const c = document.createElement('span');
+          c.className = 'badge-tag c';
+          c.textContent = 'C';
+          wrap.append(c);
+        }
 
         const pname = document.createElement('span');
         pname.className = 'pname';
@@ -2310,6 +2366,10 @@
       const femalePunished = s.punished.some((r) => r.player.gender === 'F');
       if (!femaleOnPitch && !femalePunished) {
         warnings.push(`${s.name} — no female player on pitch`);
+      }
+      // A captain in the sin bin still holds the armband, so every row of the team counts.
+      if (['ready', 'live', 'halftime'].includes(m.status) && !sideOf(s.teamId).some((r) => r.is_captain)) {
+        warnings.push(`${s.name} — no captain`);
       }
 
       s.eventEl.replaceChildren();
@@ -2357,9 +2417,18 @@
       btn.disabled = matchBusy;
       btn.addEventListener('click', handler);
       controls.append(btn);
+      return btn;
     };
     if (m.status === 'ready') {
-      addControl('Kick off', kickOff, true);
+      const blockers = kickOffBlockers();
+      const kickOffBtn = addControl('Kick off', kickOff, true);
+      kickOffBtn.disabled = matchBusy || blockers.length > 0;
+      if (state.role === 'scorer') addControl('Edit line-up', () => openLineup(liveMatch), false);
+      if (blockers.length > 0) {
+        setMatchStatus('Cannot kick off yet: ' + blockers.join(' · '), true);
+      } else if ($('matchStatus').textContent.startsWith('Cannot kick off yet')) {
+        setMatchStatus('', false);
+      }
     } else if (m.status === 'live') {
       if (m.current_half === 2) addControl('Full time', goFullTime, false);
       else addControl('Half time', goHalfTime, false);
@@ -2392,6 +2461,10 @@
   }
 
   async function kickOff() {
+    if (kickOffBlockers().length > 0) {
+      renderMatch();
+      return;
+    }
     await patchMatch({ status: 'live', current_half: 1, half_started_at: new Date().toISOString(), paused_secs: 0, is_running: true });
   }
 
@@ -2572,8 +2645,39 @@
     subFlow = { out: row, busy: false, mode: 'sub' };
     $('subMsg').textContent = '';
     $('subKeeper').hidden = !row.is_keeper;
+    $('subCaptain').hidden = !!row.is_captain;
+    $('subCancel').textContent = 'Cancel';
     renderSubList();
     $('subOverlay').classList.add('open');
+  }
+
+  function openArmband(teamId) {
+    subFlow = { out: null, busy: false, mode: 'armband', teamId };
+    $('subMsg').textContent = '';
+    $('subKeeper').hidden = true;
+    $('subCaptain').hidden = true;
+    $('subCancel').textContent = 'Skip';
+    renderSubList();
+    $('subOverlay').classList.add('open');
+  }
+
+  async function setCaptain(row) {
+    if (subFlow.busy) return;
+    subFlow.busy = true;
+    try {
+      const { error } = await getClient().from('match_players')
+        .update({ is_captain: false })
+        .eq('match_id', liveMatch.id).eq('team_id', row.team_id);
+      if (error) throw error;
+      await updateMatchPlayer(row.player_id, { is_captain: true });
+      closeSub();
+      await refreshLivePlayers();
+    } catch (err) {
+      subFlow.busy = false;
+      $('subMsg').textContent = describeError(err);
+      console.error('Pitchside captain change failed:', err);
+      await refreshLivePlayers();
+    }
   }
 
   function closeSub() {
@@ -2582,6 +2686,44 @@
   }
 
   function renderSubList() {
+    if (subFlow.mode === 'armband') {
+      $('subTitle').textContent = 'Who takes the armband?';
+      const onPitchNow = sideOf(subFlow.teamId).filter((r) => r.on_pitch);
+      const armbandList = $('subList');
+      armbandList.replaceChildren();
+      for (const r of onPitchNow) {
+        const row = document.createElement('button');
+        row.type = 'button';
+        row.className = 'player-row';
+        row.disabled = subFlow.busy;
+
+        const badge = document.createElement('span');
+        badge.className = 'initials';
+        badge.textContent = initials(r.player.name);
+
+        const name = document.createElement('span');
+        name.className = 'player-name';
+        name.textContent = r.player.name;
+
+        row.append(badge, name);
+        if (r.player.gender === 'F') {
+          const tag = document.createElement('span');
+          tag.className = 'f-tag';
+          tag.textContent = 'F';
+          row.append(tag);
+        }
+        row.addEventListener('click', () => setCaptain(r));
+        armbandList.append(row);
+      }
+      if (!onPitchNow.length) {
+        const empty = document.createElement('div');
+        empty.className = 'empty';
+        empty.textContent = 'No players on pitch';
+        armbandList.append(empty);
+      }
+      return;
+    }
+
     const out = subFlow.out;
     const team = sideOf(out.team_id).filter((r) => r.player_id !== out.player_id);
     const bench = team.filter((r) => !r.on_pitch && !r.sent_off && binSecsLeft(r) === null);
@@ -2643,7 +2785,7 @@
     subFlow.busy = true;
     renderSubList();
     try {
-      await updateMatchPlayer(out.player_id, { on_pitch: false, is_keeper: false });
+      await updateMatchPlayer(out.player_id, { on_pitch: false, is_keeper: false, is_captain: false });
       await updateMatchPlayer(inRow.player_id, { on_pitch: true, is_keeper: !!out.is_keeper });
       const { error } = await getClient().from('match_events').insert({
         match_id: liveMatch.id,
@@ -2654,9 +2796,11 @@
         clock_secs: elapsedSecs(liveMatch)
       });
       if (error) throw error;
-      closeSub();
       await refreshLivePlayers();
       await loadEvents();
+      // openArmband replaces subFlow and keeps the overlay open, so closeSub is skipped on that path.
+      if (out.is_captain) openArmband(out.team_id);
+      else closeSub();
     } catch (err) {
       subFlow.busy = false;
       renderSubList();
@@ -2740,6 +2884,7 @@
   $('menuOverlay').addEventListener('click', (e) => { if (e.target === e.currentTarget) closeMenu(); });
   $('subCancel').addEventListener('click', closeSub);
   $('subOverlay').addEventListener('click', (e) => { if (e.target === e.currentTarget) closeSub(); });
+  $('subCaptain').addEventListener('click', () => setCaptain(subFlow.out));
   $('subKeeper').addEventListener('click', () => {
     subFlow.mode = 'keeper';
     $('subKeeper').hidden = true;
@@ -2987,9 +3132,12 @@
   async function applyCardConsequence(playerId, teamId) {
     if (!playerId) return;
     const { yellows, reds } = cardTotals(playerId);
+    const wasCaptain = livePlayers.some((r) => r.player_id === playerId && r.is_captain);
     let fields = null;
+    let sentOff = false;
     if (yellows >= 3 || reds >= 2) {
-      fields = { sent_off: true, on_pitch: false, sin_bin_until: null, sin_bin_secs_left: null };
+      sentOff = true;
+      fields = { sent_off: true, on_pitch: false, sin_bin_until: null, sin_bin_secs_left: null, is_captain: false };
     } else if (yellows === 2 || reds === 1) {
       fields = { sin_bin_until: new Date(nowMs() + 60 * 1000).toISOString(), sin_bin_secs_left: null, on_pitch: false };
     }
@@ -3008,6 +3156,8 @@
       console.error('Pitchside card consequence failed:', err);
     }
     await refreshLivePlayers();
+    // A sin bin leaves the armband alone; only a send-off hands it on.
+    if (sentOff && wasCaptain) openArmband(teamId);
   }
 
   function closeEvent() {
