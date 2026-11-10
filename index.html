@@ -406,6 +406,15 @@
     .panels { gap: 16px; }
   }
 
+  /* ---------- Tournaments ---------- */
+  .standings-wrap { overflow-x: auto; margin: 4px 0 8px; }
+  .standings { width: 100%; border-collapse: collapse; font-size: 13px; white-space: nowrap; }
+  .standings th, .standings td { padding: 7px 6px; text-align: right; border-bottom: 1px solid var(--border); }
+  .standings th { font-size: 11px; font-weight: 600; color: var(--muted); }
+  .standings .team { text-align: left; }
+  .standings .pts { font-weight: 700; }
+  .standings .colour-dot { display: inline-block; width: 14px; height: 14px; margin-right: 8px; vertical-align: middle; }
+
   /* ---------- Match screen ---------- */
   #screenMatch { display: none; }
   #screenMatch:not([hidden]) { display: flex; flex-direction: column; gap: 8px; height: 100%; }
@@ -534,7 +543,7 @@
 
         <div class="tiles">
           <button type="button" class="tile" id="tileTeams">TEAMS</button>
-          <button type="button" class="tile" id="tileTournament" disabled>TOURNAMENT</button>
+          <button type="button" class="tile" id="tileTournament">TOURNAMENT</button>
           <button type="button" class="tile" id="tileSetup">SETUP</button>
         </div>
 
@@ -572,9 +581,25 @@
     </section>
     </section>
 
+    <section class="screen" id="screenTournament" hidden>
+    <section class="panel" id="tournamentPanel">
+      <div class="panel-head">
+        <h2 id="tournamentHeading">Tournaments</h2>
+        <button type="button" id="tournamentHeadBtn" hidden>New tournament</button>
+      </div>
+      <div id="tournamentBody"></div>
+      <div class="panel-foot" id="tournamentStatus"></div>
+    </section>
+    </section>
+
     <section class="screen" id="screenMatchSetup" hidden>
       <div class="panel">
         <h2>New match</h2>
+
+        <div class="field-label">Tournament</div>
+        <div class="player-list">
+          <button type="button" class="player-row" id="pickTournament"></button>
+        </div>
 
         <div class="field-label">Teams</div>
         <div class="player-list">
@@ -734,6 +759,20 @@
   </div>
 </div>
 
+<!-- New tournament -->
+<div class="overlay" id="tournamentOverlay" role="dialog" aria-modal="true" aria-labelledby="tournamentTitle">
+  <div class="modal" style="max-width:420px">
+    <h3 id="tournamentTitle">New tournament</h3>
+    <label class="field-label" for="tournamentName">Name</label>
+    <input class="text-input" id="tournamentName" type="text" autocomplete="off" maxlength="40">
+    <div class="form-msg" id="tournamentMsg" aria-live="polite"></div>
+    <div class="modal-actions">
+      <button type="button" id="tournamentCancel">Cancel</button>
+      <button type="button" id="tournamentSave" class="primary">Save</button>
+    </div>
+  </div>
+</div>
+
 <!-- Team picker -->
 <div class="overlay" id="teamPickOverlay" role="dialog" aria-modal="true" aria-labelledby="teamPickTitle">
   <div class="modal" style="max-width:420px">
@@ -843,8 +882,11 @@
     if (!isScorer) closePlayerPanel();
     renderPlayers();
     if (!isScorer) closeTeamPanel();
-    if (!isScorer && currentScreen !== 'launch') showScreen('launch');
+    // Viewers may stay on the tournament screen; every other screen is scorer-only.
+    if (!isScorer && currentScreen !== 'launch' && currentScreen !== 'tournament') showScreen('launch');
     renderTeams();
+    if (!isScorer) closeTournamentForm();
+    renderTournament();
   }
 
   // ---------- PIN entry ----------
@@ -965,6 +1007,11 @@
     }
     if ($('teamPickOverlay').classList.contains('open')) {
       if (e.key === 'Escape') closeTeamPick();
+      return;
+    }
+    if ($('tournamentOverlay').classList.contains('open')) {
+      if (e.key === 'Escape') closeTournamentForm();
+      else if (e.key === 'Enter' && e.target === $('tournamentName')) saveTournament();
       return;
     }
     if ($('teamOverlay').classList.contains('open')) {
@@ -1567,9 +1614,11 @@
   $('teamOverlay').addEventListener('click', (e) => { if (e.target === e.currentTarget) closeTeamPanel(); });
 
   // ---------- Match setup ----------
-  const matchSetup = { teamA: null, teamB: null, size: 6, kickoff: null, busy: false, picking: null };
+  const matchSetup = { teamA: null, teamB: null, size: 6, kickoff: null, busy: false, picking: null, tournament: null };
 
-  function openMatchSetup() {
+  function openMatchSetup(tournament) {
+    // A tournament passed in wins; otherwise the newest tournament, or a friendly.
+    matchSetup.tournament = tournament || tournaments[0] || null;
     matchSetup.teamA = null;
     matchSetup.teamB = null;
     matchSetup.size = 6;
@@ -1596,6 +1645,17 @@
   }
 
   function renderMatchSetup() {
+    const tournamentBtn = $('pickTournament');
+    const tournamentName = document.createElement('span');
+    tournamentBtn.replaceChildren(tournamentName);
+    if (matchSetup.tournament) {
+      tournamentName.className = 'player-name';
+      tournamentName.textContent = matchSetup.tournament.name;
+    } else {
+      tournamentName.style.color = 'var(--muted)';
+      tournamentName.textContent = 'No tournament (friendly)';
+    }
+
     for (const slot of ['A', 'B']) {
       const btn = $('pickTeam' + slot);
       const team = matchSetup['team' + slot];
@@ -1636,7 +1696,31 @@
     $('createMatchBtn').disabled = !ready || matchSetup.busy;
   }
 
+  // Reuses the team picker overlay as a plain pick list.
+  function openTournamentPick() {
+    $('teamPickTitle').textContent = 'Choose tournament';
+    const list = $('teamPickList');
+    list.replaceChildren();
+    for (const t of [null, ...tournaments]) {
+      const row = document.createElement('button');
+      row.type = 'button';
+      row.className = 'player-row';
+      const name = document.createElement('span');
+      name.className = 'player-name';
+      name.textContent = t ? t.name : 'No tournament (friendly)';
+      row.append(name);
+      row.addEventListener('click', () => {
+        matchSetup.tournament = t;
+        closeTeamPick();
+        renderMatchSetup();
+      });
+      list.append(row);
+    }
+    $('teamPickOverlay').classList.add('open');
+  }
+
   function openTeamPick(slot) {
+    $('teamPickTitle').textContent = 'Choose team';
     matchSetup.picking = slot;
     const other = slot === 'A' ? matchSetup.teamB : matchSetup.teamA;
     const list = $('teamPickList');
@@ -1695,6 +1779,7 @@
           break_secs: breakSecs,
           second_half_secs: secondHalf,
           kickoff_team_id: matchSetup.kickoff || matchSetup.teamA.id,
+          tournament_id: matchSetup.tournament ? matchSetup.tournament.id : null,
           status: 'setup'
         })
         .select('id')
@@ -1714,6 +1799,39 @@
   let matchScores = {};          // match id -> { a, b } for finished and abandoned matches
   let matchesLoaded = false;
 
+  // Scores for the given match rows: match id -> { a, b, pa, pb, pens }. Throws on a query error.
+  async function buildScores(matchList) {
+    const scores = {};
+    if (!matchList.length) return scores;
+    const { data: goals, error: goalsError } = await getClient()
+      .from('match_events')
+      .select('match_id, team_id, event_type, detail')
+      .in('event_type', ['goal', 'pen'])
+      .in('match_id', matchList.map((m) => m.id));
+    if (goalsError) throw goalsError;
+    for (const m of matchList) scores[m.id] = { a: 0, b: 0, pa: 0, pb: 0, pens: false };
+    // Same rule as scoreFor(): an own goal counts for the other team.
+    for (const g of goals || []) {
+      const m = matchList.find((d) => d.id === g.match_id);
+      if (!m) continue;
+      if (g.event_type === 'pen') {
+        // Shootout kicks are tallied apart and never added to the match score.
+        scores[m.id].pens = true;
+        if (g.detail === 'scored') {
+          if (g.team_id === m.team_a_id) scores[m.id].pa += 1;
+          else if (g.team_id === m.team_b_id) scores[m.id].pb += 1;
+        }
+        continue;
+      }
+      const own = String(g.detail || '').includes('own');
+      const forA = own ? g.team_id === m.team_b_id : g.team_id === m.team_a_id;
+      const forB = own ? g.team_id === m.team_a_id : g.team_id === m.team_b_id;
+      if (forA) scores[m.id].a += 1;
+      else if (forB) scores[m.id].b += 1;
+    }
+    return scores;
+  }
+
   async function loadMatches() {
     try {
       const { data, error } = await getClient()
@@ -1726,37 +1844,7 @@
       matchesLoaded = true;
 
       try {
-        const done = matches.filter((m) => m.status === 'finished' || m.status === 'abandoned');
-        const scores = {};
-        if (done.length) {
-          const { data: goals, error: goalsError } = await getClient()
-            .from('match_events')
-            .select('match_id, team_id, event_type, detail')
-            .in('event_type', ['goal', 'pen'])
-            .in('match_id', done.map((m) => m.id));
-          if (goalsError) throw goalsError;
-          for (const m of done) scores[m.id] = { a: 0, b: 0, pa: 0, pb: 0, pens: false };
-          // Same rule as scoreFor(): an own goal counts for the other team.
-          for (const g of goals || []) {
-            const m = done.find((d) => d.id === g.match_id);
-            if (!m) continue;
-            if (g.event_type === 'pen') {
-              // Shootout kicks are tallied apart and never added to the match score.
-              scores[m.id].pens = true;
-              if (g.detail === 'scored') {
-                if (g.team_id === m.team_a_id) scores[m.id].pa += 1;
-                else if (g.team_id === m.team_b_id) scores[m.id].pb += 1;
-              }
-              continue;
-            }
-            const own = String(g.detail || '').includes('own');
-            const forA = own ? g.team_id === m.team_b_id : g.team_id === m.team_a_id;
-            const forB = own ? g.team_id === m.team_a_id : g.team_id === m.team_b_id;
-            if (forA) scores[m.id].a += 1;
-            else if (forB) scores[m.id].b += 1;
-          }
-        }
-        matchScores = scores;
+        matchScores = await buildScores(matches.filter((m) => m.status === 'finished' || m.status === 'abandoned'));
       } catch (err) {
         matchScores = {};
         console.error('Pitchside score load failed:', err);
@@ -1918,6 +2006,7 @@
     }
   }
 
+  $('pickTournament').addEventListener('click', openTournamentPick);
   $('pickTeamA').addEventListener('click', () => openTeamPick('A'));
   $('pickTeamB').addEventListener('click', () => openTeamPick('B'));
   $('teamPickCancel').addEventListener('click', closeTeamPick);
@@ -1929,6 +2018,379 @@
     renderMatchSetup();
   });
   $('createMatchBtn').addEventListener('click', createMatch);
+
+  // ---------- Tournaments ----------
+  let tournaments = [];
+  // selected null = list state; otherwise the open tournament with its finished matches and table.
+  const tournamentView = { selected: null, rows: [], matches: [], scores: {}, busy: false };
+
+  async function loadTournaments() {
+    try {
+      const { data, error } = await getClient()
+        .from('tournaments')
+        .select('id, name, created_at')
+        .order('created_at', { ascending: false });
+      if (error) throw error;
+      tournaments = data || [];
+    } catch (err) {
+      tournaments = [];
+      console.error('Pitchside tournament load failed:', err);
+    }
+    renderTournament();
+  }
+
+  function setTournamentStatus(text, isError) {
+    $('tournamentStatus').textContent = text;
+    $('tournamentStatus').className = isError ? 'panel-foot error' : 'panel-foot';
+  }
+
+  function openTournaments() {
+    tournamentView.selected = null;
+    tournamentView.busy = false;
+    setTournamentStatus('', false);
+    renderTournament();
+    showScreen('tournament');
+  }
+
+  async function openTournament(t) {
+    const v = tournamentView;
+    v.selected = t;
+    v.rows = [];
+    v.matches = [];
+    v.scores = {};
+    v.busy = true;
+    setTournamentStatus('', false);
+    renderTournament();
+    try {
+      const { data, error } = await getClient()
+        .from('matches')
+        .select('id, status, team_a_id, team_b_id, created_at')
+        .eq('tournament_id', t.id)
+        .eq('status', 'finished')
+        .order('created_at', { ascending: false });
+      if (error) throw error;
+      const scores = await buildScores(data || []);
+      if (v.selected !== t) return;   // the scorer moved on while this was loading
+      v.matches = data || [];
+      v.scores = scores;
+      v.rows = computeStandings(v.matches, v.scores);
+    } catch (err) {
+      if (v.selected !== t) return;
+      setTournamentStatus(describeError(err), true);
+      console.error('Pitchside tournament open failed:', err);
+    }
+    v.busy = false;
+    renderTournament();
+  }
+
+  // League table from finished matches. A level match settled on penalties is a win and a loss;
+  // shootout kicks never add to goals for or against.
+  function computeStandings(matchList, scores) {
+    const byTeam = new Map();
+    const rowFor = (teamId) => {
+      if (!byTeam.has(teamId)) {
+        const team = teamById(teamId);
+        byTeam.set(teamId, {
+          teamId,
+          name: team ? team.name : 'Unknown team',
+          colour: team ? team.colour : '',
+          p: 0, w: 0, d: 0, l: 0, gf: 0, ga: 0, gd: 0, pts: 0
+        });
+      }
+      return byTeam.get(teamId);
+    };
+    for (const m of matchList) {
+      const ra = rowFor(m.team_a_id);
+      const rb = rowFor(m.team_b_id);
+      const sc = scores[m.id];
+      if (!sc) continue;
+      ra.p += 1;
+      rb.p += 1;
+      ra.gf += sc.a;
+      ra.ga += sc.b;
+      rb.gf += sc.b;
+      rb.ga += sc.a;
+      let aWon = null;   // null = draw
+      if (sc.a !== sc.b) aWon = sc.a > sc.b;
+      else if (sc.pens && sc.pa !== sc.pb) aWon = sc.pa > sc.pb;
+      if (aWon === null) {
+        ra.d += 1;
+        rb.d += 1;
+      } else {
+        (aWon ? ra : rb).w += 1;
+        (aWon ? rb : ra).l += 1;
+      }
+    }
+    const rows = [...byTeam.values()];
+    for (const r of rows) {
+      r.pts = r.w * 3 + r.d;
+      r.gd = r.gf - r.ga;
+    }
+    return rows.sort((x, y) => y.pts - x.pts || y.gd - x.gd || y.gf - x.gf || x.name.localeCompare(y.name));
+  }
+
+  function renderTournament() {
+    const isScorer = state.role === 'scorer';
+    const v = tournamentView;
+    const body = $('tournamentBody');
+    const headBtn = $('tournamentHeadBtn');
+    body.replaceChildren();
+
+    if (!v.selected) {
+      $('tournamentHeading').textContent = 'Tournaments';
+      headBtn.textContent = 'New tournament';
+      headBtn.hidden = !isScorer;
+
+      const list = document.createElement('div');
+      list.className = 'player-list';
+      for (const t of tournaments) {
+        const row = document.createElement('button');
+        row.type = 'button';
+        row.className = 'player-row';
+        const name = document.createElement('span');
+        name.className = 'player-name';
+        name.textContent = t.name;
+        row.append(name);
+        row.addEventListener('click', () => openTournament(t));
+        list.append(row);
+      }
+      if (!tournaments.length) {
+        const empty = document.createElement('div');
+        empty.className = 'empty';
+        empty.textContent = 'No tournaments yet';
+        list.append(empty);
+      }
+      body.append(list);
+      return;
+    }
+
+    $('tournamentHeading').textContent = v.selected.name;
+    headBtn.textContent = 'All tournaments';
+    headBtn.hidden = false;
+
+    if (isScorer) {
+      const start = document.createElement('button');
+      start.type = 'button';
+      start.className = 'primary';
+      start.style.cssText = 'width:100%; margin-bottom:10px;';
+      start.textContent = 'Start a match';
+      start.addEventListener('click', () => openMatchSetup(tournamentView.selected));
+      body.append(start);
+    }
+
+    if (v.busy && !v.matches.length) {
+      const loading = document.createElement('div');
+      loading.className = 'empty';
+      loading.textContent = 'Loading…';
+      body.append(loading);
+    } else if (!v.matches.length) {
+      const empty = document.createElement('div');
+      empty.className = 'empty';
+      empty.textContent = 'No finished matches yet';
+      body.append(empty);
+    } else {
+      const wrap = document.createElement('div');
+      wrap.className = 'standings-wrap';
+      const table = document.createElement('table');
+      table.className = 'standings';
+
+      const headRow = document.createElement('tr');
+      for (const label of ['#', 'Team', 'P', 'W', 'D', 'L', 'GF', 'GA', 'GD', 'Pts']) {
+        const th = document.createElement('th');
+        th.scope = 'col';
+        th.textContent = label;
+        if (label === 'Team') th.className = 'team';
+        headRow.append(th);
+      }
+      const thead = document.createElement('thead');
+      thead.append(headRow);
+
+      const tbody = document.createElement('tbody');
+      v.rows.forEach((r, i) => {
+        const tr = document.createElement('tr');
+        const cell = (text, className) => {
+          const td = document.createElement('td');
+          td.textContent = text;
+          if (className) td.className = className;
+          tr.append(td);
+          return td;
+        };
+        cell(String(i + 1));
+        const teamCell = cell('', 'team');
+        const dot = document.createElement('span');
+        dot.className = 'colour-dot';
+        dot.style.background = r.colour;
+        teamCell.append(dot, r.name);
+        for (const n of [r.p, r.w, r.d, r.l, r.gf, r.ga]) cell(String(n), 'num');
+        cell(r.gd > 0 ? '+' + r.gd : String(r.gd), 'num');
+        cell(String(r.pts), 'num pts');
+        tbody.append(tr);
+      });
+
+      table.append(thead, tbody);
+      wrap.append(table);
+      body.append(wrap);
+
+      const label = document.createElement('div');
+      label.className = 'field-label';
+      label.textContent = 'Matches';
+      body.append(label);
+
+      // Same wording as the finished rows on the launch screen, but read-only.
+      const list = document.createElement('div');
+      list.className = 'player-list';
+      for (const m of v.matches) {
+        const teamA = teamById(m.team_a_id);
+        const teamB = teamById(m.team_b_id);
+        const score = v.scores[m.id];
+
+        const row = document.createElement('div');
+        row.className = 'player-row';
+
+        const dot = document.createElement('span');
+        dot.className = 'colour-dot';
+        if (teamA) dot.style.background = teamA.colour;
+
+        const name = document.createElement('span');
+        name.className = 'player-name';
+        name.textContent = score
+          ? `${teamA ? teamA.name : 'Unknown team'} ${score.a} – ${score.b} ${teamB ? teamB.name : 'Unknown team'}`
+          : `${teamA ? teamA.name : 'Unknown team'} v ${teamB ? teamB.name : 'Unknown team'}`;
+
+        const status = document.createElement('span');
+        status.style.cssText = 'margin-left:auto; color:var(--muted); font-size:13px; white-space:nowrap;';
+        status.textContent = score && score.pens ? `Pens ${score.pa} – ${score.pb}` : 'Full time';
+
+        row.append(dot, name, status);
+        list.append(row);
+      }
+      body.append(list);
+    }
+
+    if (isScorer) {
+      const del = document.createElement('button');
+      del.type = 'button';
+      del.className = 'danger';
+      del.style.cssText = 'width:100%; margin-top:14px;';
+      del.textContent = 'Delete tournament';
+      del.disabled = v.busy;
+      del.addEventListener('click', () => confirmDeleteTournament(v.selected));
+      body.append(del);
+    }
+  }
+
+  // ---------- New / delete tournament ----------
+  let tournamentFormBusy = false;
+
+  function openTournamentForm() {
+    if (state.role !== 'scorer') return;
+    tournamentFormBusy = false;
+    $('tournamentName').value = '';
+    $('tournamentMsg').textContent = '';
+    $('tournamentSave').disabled = false;
+    $('tournamentOverlay').classList.add('open');
+    $('tournamentName').focus();
+  }
+
+  function closeTournamentForm() {
+    $('tournamentOverlay').classList.remove('open');
+    tournamentFormBusy = false;
+  }
+
+  async function saveTournament() {
+    if (state.role !== 'scorer' || tournamentFormBusy) return;
+    const name = $('tournamentName').value.trim();
+    if (!name) {
+      $('tournamentMsg').textContent = 'Enter a name';
+      return;
+    }
+    if (tournaments.some((t) => String(t.name || '').toLowerCase() === name.toLowerCase())) {
+      $('tournamentMsg').textContent = 'A tournament with that name already exists';
+      return;
+    }
+
+    tournamentFormBusy = true;
+    $('tournamentSave').disabled = true;
+    $('tournamentMsg').textContent = '';
+    try {
+      const { error } = await getClient().from('tournaments').insert({ name });
+      if (error) throw error;
+      await loadTournaments();
+      closeTournamentForm();
+      renderTournament();
+    } catch (err) {
+      tournamentFormBusy = false;
+      $('tournamentSave').disabled = false;
+      $('tournamentMsg').textContent = describeError(err);
+      console.error('Pitchside tournament save failed:', err);
+    }
+  }
+
+  async function confirmDeleteTournament(t) {
+    if (state.role !== 'scorer' || !t || tournamentView.busy) return;
+    tournamentView.busy = true;
+    setTournamentStatus('', false);
+    renderTournament();
+    let count = 0;
+    try {
+      // Any match at all blocks the delete, not only finished ones.
+      const res = await getClient()
+        .from('matches')
+        .select('id', { count: 'exact', head: true })
+        .eq('tournament_id', t.id);
+      if (res.error) throw res.error;
+      count = res.count || 0;
+    } catch (err) {
+      tournamentView.busy = false;
+      setTournamentStatus(describeError(err), true);
+      renderTournament();
+      console.error('Pitchside tournament match count failed:', err);
+      return;
+    }
+    tournamentView.busy = false;
+    renderTournament();
+    if (count > 0) {
+      setTournamentStatus('This tournament has matches. Delete its matches first.', true);
+      return;
+    }
+    showConfirm({
+      title: 'Delete tournament?',
+      text: `${t.name} will be permanently removed.`,
+      okLabel: 'Delete',
+      onConfirm: () => openPinFor({
+        title: 'Confirm delete',
+        text: 'Enter the scorer PIN to delete this tournament.',
+        onOk: () => deleteTournament(t)
+      })
+    });
+  }
+
+  async function deleteTournament(t) {
+    if (state.role !== 'scorer') return;
+    tournamentView.busy = true;
+    renderTournament();
+    try {
+      const { error } = await getClient().from('tournaments').delete().eq('id', t.id);
+      if (error) throw error;
+      tournamentView.selected = null;
+      tournamentView.busy = false;
+      setTournamentStatus('', false);
+      await loadTournaments();
+    } catch (err) {
+      tournamentView.busy = false;
+      setTournamentStatus(describeError(err), true);
+      renderTournament();
+      console.error('Pitchside tournament delete failed:', err);
+    }
+  }
+
+  $('tournamentHeadBtn').addEventListener('click', () => {
+    if (tournamentView.selected) openTournaments();
+    else openTournamentForm();
+  });
+  $('tournamentSave').addEventListener('click', saveTournament);
+  $('tournamentCancel').addEventListener('click', closeTournamentForm);
+  $('tournamentOverlay').addEventListener('click', (e) => { if (e.target === e.currentTarget) closeTournamentForm(); });
 
   // ---------- Line-up ----------
   const lineup = { match: null, picked: new Set(), keepers: {}, captains: {}, busy: false };
@@ -3610,7 +4072,7 @@
   }
 
   // ---------- Screen router ----------
-  const SCREENS = { launch: 'screenLaunch', players: 'screenPlayers', teams: 'screenTeams', matchSetup: 'screenMatchSetup', lineup: 'screenLineup', match: 'screenMatch' };
+  const SCREENS = { launch: 'screenLaunch', players: 'screenPlayers', teams: 'screenTeams', matchSetup: 'screenMatchSetup', lineup: 'screenLineup', match: 'screenMatch', tournament: 'screenTournament' };
   let currentScreen = 'launch';
 
   function showScreen(name) {
@@ -3626,9 +4088,10 @@
 
   $('backBtn').addEventListener('click', () => showScreen('launch'));
   $('tileTeams').addEventListener('click', () => showScreen('teams'));
+  $('tileTournament').addEventListener('click', openTournaments);
   $('tileSetup').addEventListener('click', () => showScreen('players'));
   $('startMatchBtn').disabled = false;
-  $('startMatchBtn').addEventListener('click', openMatchSetup);
+  $('startMatchBtn').addEventListener('click', () => openMatchSetup());
 
   // ---------- Init ----------
   if (state.role === 'scorer') closeSplash();
@@ -3636,6 +4099,7 @@
   renderRole();
   loadPlayers();
   loadTeams();
+  loadTournaments();
   loadMatches();
 </script>
 </body>
