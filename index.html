@@ -573,6 +573,25 @@
     body[data-screen="match"] .pitch-player { gap: 1px; }
     body[data-screen="match"] .pitch-player .initials { width: 36px; height: 36px; font-size: 14px; }
   }
+  /* ---------- UI tidy: empty footers, standings on a phone, event choice buttons ---------- */
+  .panel-foot:empty { display: none; }
+  .standings-wrap { max-width: 560px; }
+  .standings .team { width: 100%; max-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  #eventStep .seg .toggle { flex: 1; min-height: 56px; }
+  @media (max-width: 480px) {
+    .standings th, .standings td { padding: 7px 4px; }
+    .standings th:nth-child(7), .standings td:nth-child(7),
+    .standings th:nth-child(8), .standings td:nth-child(8) { display: none; }
+  }
+
+  /* ---------- Picked rows (line-up and team squad): high contrast for outdoor use ---------- */
+  button.squad-row { padding-left: 10px; padding-right: 10px; }
+  button.squad-row[aria-pressed="true"] { background: #F2F5F3; color: #141413; font-weight: 600; }
+  button.squad-row[aria-pressed="true"] .squad-tick { color: #141413; }
+  button.squad-row[aria-pressed="true"] .f-tag { background: #141413; color: #F2F5F3; }
+  button.squad-row[aria-pressed="true"] .keeper-btn { background: #FFFFFF; border-color: #141413; color: #141413; }
+  button.squad-row[aria-pressed="true"] .keeper-btn[aria-pressed="true"] { background: var(--amber); border-color: #141413; color: #141413; }
+  button.squad-row[aria-pressed="true"] .captain-btn[aria-pressed="true"] { background: #141413; border-color: #141413; color: #FFFFFF; }
 </style>
 </head>
 <body>
@@ -3058,7 +3077,7 @@
       // A shortfall caused by a bin or send-off is a punishment, not a selection choice.
       const femaleOnPitch = s.onPitch.some((r) => r.player.gender === 'F');
       const femalePunished = s.punished.some((r) => r.player.gender === 'F');
-      if (!femaleOnPitch && !femalePunished) {
+      if (['ready', 'live', 'halftime'].includes(m.status) && !femaleOnPitch && !femalePunished) {
         warnings.push(`${s.name} — no female player on pitch`);
       }
       // A captain in the sin bin still holds the armband, so every row of the team counts.
