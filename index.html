@@ -592,6 +592,34 @@
   button.squad-row[aria-pressed="true"] .keeper-btn { background: #FFFFFF; border-color: #141413; color: #141413; }
   button.squad-row[aria-pressed="true"] .keeper-btn[aria-pressed="true"] { background: var(--amber); border-color: #141413; color: #141413; }
   button.squad-row[aria-pressed="true"] .captain-btn[aria-pressed="true"] { background: #141413; border-color: #141413; color: #FFFFFF; }
+  /* ---------- Goal and card markers on the player circles (item 23) ---------- */
+  .mk-goal {
+    position: absolute; top: -6px; left: -7px; z-index: 2;
+    display: flex; align-items: center; gap: 1px;
+    height: 16px; padding: 0 4px 0 3px; border-radius: 999px;
+    background: #F2F5F3; color: #141413;
+    font-size: 10px; font-weight: 700; line-height: 1;
+    box-shadow: 0 0 0 1px rgba(0,0,0,0.45);
+  }
+  .mk-goal .bl { font-size: 10px; }
+  .mk-goal.own { background: #D4000F; color: #FFFFFF; }
+  /* Scored and also put one in his own net: white pill, red ring. The own-goal count lives in the event log. */
+  .mk-goal.alsoown { box-shadow: 0 0 0 2px #D4000F; }
+  .mk-cards {
+    position: absolute; top: 12px; left: -6px; z-index: 2;
+    display: flex; flex-direction: column; gap: 2px;
+  }
+  .mk-card {
+    width: 10px; height: 13px; border-radius: 2px;
+    box-shadow: 0 0 0 1px rgba(0,0,0,0.5);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 8px; font-weight: 700; line-height: 1;
+  }
+  .mk-card.y { background: #FFCC00; color: #141413; }
+  .mk-card.r { background: #D4000F; color: #FFFFFF; }
+  /* The pitch clips anything overhanging, so bin-strip markers stay inside the badge. */
+  .bin-player .mk-goal { top: 0; left: 0; }
+  .bin-player .mk-cards { top: 16px; left: 0; }
   /* ---------- Event animations ---------- */
   .fx { position: absolute; inset: 0; z-index: 5; pointer-events: none; overflow: hidden; display: flex; align-items: center; justify-content: center; text-align: center; color: #fff; }
   .fx-wrap { display: flex; flex-direction: column; align-items: center; gap: 6px; max-width: 92%; padding: 10px 18px; border-radius: 14px; background: rgba(5, 9, 7, 0.86); animation: fxOut 0.3s both; animation-delay: var(--fx-out, 1.5s); }
@@ -3103,6 +3131,7 @@
           c.textContent = 'C';
           wrap.append(c);
         }
+        appendMarkers(wrap, r.player_id);
 
         const pname = document.createElement('span');
         pname.className = 'pname';
@@ -3462,10 +3491,14 @@
           item.addEventListener('click', () => returnFromBin(r));
         }
 
+        const wrap = document.createElement('div');
+        wrap.className = 'badge-wrap';
         const badge = document.createElement('span');
         badge.className = 'initials';
         badge.textContent = initials(r.player.name);
         if (team) badge.style.background = team.colour;
+        wrap.append(badge);
+        appendMarkers(wrap, r.player_id);
 
         const pname = document.createElement('span');
         pname.className = 'pname';
@@ -3475,7 +3508,7 @@
         count.className = 'bin-count';
         count.textContent = r.sent_off ? 'OFF' : String(secs);
 
-        item.append(badge, pname, count);
+        item.append(wrap, pname, count);
         s.el.append(item);
       }
     }
@@ -4129,6 +4162,50 @@
       renderEventStep();
       $('eventMsg').textContent = describeError(err);
       console.error('Pitchside event save failed:', err);
+    }
+  }
+
+  // Goals on the circle. Shootout kicks are event_type 'pen' and never count here.
+  function goalTotals(playerId) {
+    const goals = liveEvents.filter((e) => e.event_type === 'goal' && e.player_id === playerId);
+    return {
+      scored: goals.filter((e) => !String(e.detail || '').includes('own')).length,
+      own: goals.filter((e) => String(e.detail || '').includes('own')).length
+    };
+  }
+
+  // Appends the goal pill and the card slivers to a .badge-wrap. Top-left is the only free
+  // corner: C is top-right, GK bottom-right, F bottom-left.
+  function appendMarkers(wrap, playerId) {
+    const { scored, own } = goalTotals(playerId);
+    const { yellows, reds } = cardTotals(playerId);
+    if (scored > 0 || own > 0) {
+      const pill = document.createElement('span');
+      pill.className = 'mk-goal' + (scored === 0 ? ' own' : own > 0 ? ' alsoown' : '');
+      const ball = document.createElement('span');
+      ball.className = 'bl';
+      ball.textContent = '⚽';
+      const num = document.createElement('span');
+      num.textContent = String(scored > 0 ? scored : own);
+      pill.append(ball, num);
+      wrap.append(pill);
+    }
+    if (yellows > 0 || reds > 0) {
+      const cards = document.createElement('span');
+      cards.className = 'mk-cards';
+      if (yellows > 0) {
+        const y = document.createElement('span');
+        y.className = 'mk-card y';
+        y.textContent = yellows > 1 ? String(yellows) : '';
+        cards.append(y);
+      }
+      if (reds > 0) {
+        const r = document.createElement('span');
+        r.className = 'mk-card r';
+        r.textContent = reds > 1 ? String(reds) : '';
+        cards.append(r);
+      }
+      wrap.append(cards);
     }
   }
 
