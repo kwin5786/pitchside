@@ -688,9 +688,35 @@
   #eventStep .seg .toggle { flex: 1; min-height: 56px; }
   @media (max-width: 480px) {
     .standings th, .standings td { padding: 7px 4px; }
-    .standings th:nth-child(7), .standings td:nth-child(7),
-    .standings th:nth-child(8), .standings td:nth-child(8) { display: none; }
+    /* The points table on a phone keeps #, Team, P, W, D, L, GD, Pts: GF, GA and CS go. */
+    .standings:not(.stats-table) th:nth-child(7), .standings:not(.stats-table) td:nth-child(7),
+    .standings:not(.stats-table) th:nth-child(8), .standings:not(.stats-table) td:nth-child(8),
+    .standings:not(.stats-table) th:nth-child(9), .standings:not(.stats-table) td:nth-child(9) { display: none; }
   }
+  /* ---------- Tournament statistics (item 31) ---------- */
+  .lb-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0 24px; }
+  .lb { min-width: 0; }
+  .lb .colour-dot, .disc-row .colour-dot { width: 14px; height: 14px; }
+  .lb .player-row, .disc-row { gap: 8px; }
+  .lb .player-name, .disc-row .player-name { flex: 1; }
+  .lb-pos { flex: none; width: 16px; color: var(--muted); }
+  .lb-per { flex: none; font-size: 12px; color: var(--muted); }
+  .lb-count { flex: none; min-width: 24px; text-align: right; font-size: 18px; font-weight: 700; }
+  @media (max-width: 700px) {
+    .lb-grid { grid-template-columns: minmax(0, 1fr); }
+  }
+  /* The player table's heading is a plain button that opens and closes the table. */
+  button.stat-toggle {
+    display: flex; align-items: center; justify-content: space-between;
+    width: 100%; min-height: var(--touch); margin-top: 12px; padding: 0;
+    background: none; border: 0; border-radius: 0; color: var(--text); text-align: left;
+  }
+  button.stat-toggle::after { content: '+'; font-size: 18px; font-weight: 400; letter-spacing: 0; color: var(--muted); }
+  button.stat-toggle[aria-expanded="true"]::after { content: '\2013'; }
+  /* The name column keeps a readable width; the table scrolls inside its wrapper instead. */
+  .standings.stats-table .team { width: auto; min-width: 120px; max-width: 160px; }
+  .disc-row .mk-card { flex: none; }
+  .disc-fouls { flex: none; min-width: 56px; text-align: right; color: var(--muted); }
 
   /* ---------- Picked rows (line-up and team squad): high contrast for outdoor use ---------- */
   button.squad-row { padding-left: 10px; padding-right: 10px; }
@@ -2605,7 +2631,9 @@
   // ---------- Tournaments ----------
   let tournaments = [];
   // selected null = list state; otherwise the open tournament with all its matches and the table.
-  const tournamentView = { selected: null, rows: [], matches: [], scores: {}, busy: false };
+  // standings = the points table; events / rows = match_events and match_players of the FINISHED
+  // matches; stats = computeTournamentStats() of those, or null when they have not loaded.
+  const tournamentView = { selected: null, standings: [], matches: [], scores: {}, events: [], rows: [], stats: null, tableOpen: false, busy: false };
 
   async function loadTournaments() {
     try {
@@ -2638,9 +2666,13 @@
   async function openTournament(t) {
     const v = tournamentView;
     v.selected = t;
-    v.rows = [];
+    v.standings = [];
     v.matches = [];
     v.scores = {};
+    v.events = [];
+    v.rows = [];
+    v.stats = null;
+    v.tableOpen = false;
     v.busy = true;
     setTournamentStatus('', false);
     renderTournament();
@@ -2657,7 +2689,34 @@
       v.scores = scores;
       // The table counts FINISHED matches only. v.matches now holds fixtures and live matches
       // too; passing those in would count them as played.
-      v.rows = computeStandings(v.matches.filter((d) => d.status === 'finished'), v.scores);
+      const finished = v.matches.filter((d) => d.status === 'finished');
+      v.standings = computeStandings(finished, v.scores);
+
+      // Player and team statistics. These two queries run only when a tournament is opened,
+      // and only for its FINISHED matches; with none finished they are skipped entirely.
+      const finishedIds = finished.map((d) => d.id);
+      if (finishedIds.length) {
+        const [eventsRes, rowsRes] = await Promise.all([
+          getClient()
+            .from('match_events')
+            .select('match_id, team_id, player_id, assist_player_id, event_type, detail, clock_secs, period, created_at')
+            .in('match_id', finishedIds)
+            .order('period', { ascending: true })
+            .order('clock_secs', { ascending: true })
+            .order('created_at', { ascending: true }),
+          getClient()
+            .from('match_players')
+            .select('match_id, player_id, team_id, on_pitch, is_keeper, sent_off, sin_bin_until, sin_bin_secs_left')
+            .in('match_id', finishedIds),
+          ensureLibrary()   // player names; already loaded at start-up in the normal case
+        ]);
+        if (eventsRes.error) throw eventsRes.error;
+        if (rowsRes.error) throw rowsRes.error;
+        if (v.selected !== t) return;
+        v.events = eventsRes.data || [];
+        v.rows = rowsRes.data || [];
+        v.stats = computeTournamentStats(v);
+      }
     } catch (err) {
       if (v.selected !== t) return;
       setTournamentStatus(describeError(err), true);
@@ -2711,6 +2770,225 @@
       r.gd = r.gf - r.ga;
     }
     return rows.sort((x, y) => y.pts - x.pts || y.gd - x.gd || y.gf - x.gf || x.name.localeCompare(y.name));
+  }
+
+  // Player and team statistics across the tournament's finished matches, counted only from
+  // the event log and the saved line-ups. Returns { players: [...], teams: Map(teamId -> {...}) }.
+  function computeTournamentStats(v) {
+    const finished = v.matches.filter((m) => m.status === 'finished');
+    const byPlayer = new Map();
+    const byTeam = new Map();
+    const playerFor = (playerId, teamId) => {
+      if (!byPlayer.has(playerId)) {
+        byPlayer.set(playerId, {
+          playerId, teamId, name: playerName(playerId),
+          apps: 0, mins: 0, goals: 0, ownGoals: 0, assists: 0, saves: 0, fouls: 0,
+          yellows: 0, reds: 0, pens: 0, goalsPerMatch: '—'
+        });
+      }
+      return byPlayer.get(playerId);
+    };
+    const teamFor = (teamId) => {
+      if (!byTeam.has(teamId)) {
+        byTeam.set(teamId, { teamId, cleanSheets: 0, fouls: 0, yellows: 0, reds: 0, saves: 0, biggestWin: '—', winMargin: -1 });
+      }
+      return byTeam.get(teamId);
+    };
+    const has = (id) => id !== null && id !== undefined;
+
+    for (const m of finished) {
+      const events = v.events.filter((e) => e.match_id === m.id);
+      const rows = v.rows.filter((r) => r.match_id === m.id);
+      const starters = startingIds(events, rows);
+      const cameOn = new Set(events.filter((e) => e.event_type === 'sub').map((e) => e.player_id));
+
+      for (const r of rows) {
+        const st = playerFor(r.player_id, r.team_id);
+        // An appearance needs time on the pitch: the player started, or came on as a sub.
+        // A player named in the squad who never got on does NOT get an appearance.
+        if (!starters.has(r.player_id) && !cameOn.has(r.player_id)) continue;
+        st.apps += 1;
+        st.mins += minutesPlayed(m, r.player_id, starters, events);
+      }
+
+      for (const e of events) {
+        const team = teamFor(e.team_id);
+        if (e.event_type === 'goal') {
+          const own = String(e.detail || '').includes('own');
+          if (has(e.player_id)) playerFor(e.player_id, e.team_id)[own ? 'ownGoals' : 'goals'] += 1;
+          if (has(e.assist_player_id)) playerFor(e.assist_player_id, e.team_id).assists += 1;
+          continue;
+        }
+        const st = has(e.player_id) ? playerFor(e.player_id, e.team_id) : null;
+        if (e.event_type === 'save') { team.saves += 1; if (st) st.saves += 1; }
+        else if (e.event_type === 'foul') { team.fouls += 1; if (st) st.fouls += 1; }
+        else if (e.event_type === 'card' && e.detail === 'yellow') { team.yellows += 1; if (st) st.yellows += 1; }
+        else if (e.event_type === 'card' && e.detail === 'red') { team.reds += 1; if (st) st.reds += 1; }
+        else if (e.event_type === 'pen' && e.detail === 'scored' && st) st.pens += 1;
+      }
+
+      // Clean sheets and biggest win read v.scores, which already applies the own-goal rule.
+      const sc = v.scores[m.id];
+      if (!sc) continue;
+      const sides = [
+        [teamFor(m.team_a_id), sc.a, sc.b, m.team_b_id],
+        [teamFor(m.team_b_id), sc.b, sc.a, m.team_a_id]
+      ];
+      for (const [team, goalsFor, against, otherId] of sides) {
+        if (against === 0) team.cleanSheets += 1;
+        if (goalsFor > against && goalsFor - against > team.winMargin) {
+          const other = teamById(otherId);
+          team.winMargin = goalsFor - against;
+          team.biggestWin = `${goalsFor} – ${against} v ${other ? other.name : 'Unknown team'}`;
+        }
+      }
+    }
+
+    const list = [...byPlayer.values()];
+    for (const st of list) st.goalsPerMatch = st.apps ? (st.goals / st.apps).toFixed(1) : '—';
+    return { players: list, teams: byTeam };
+  }
+
+  // The statistics block under the match groups. Drawn only when a finished match has loaded stats.
+  function appendTournamentStats(body, v) {
+    const stats = v.stats;
+    const dotFor = (teamId) => {
+      const team = teamById(teamId);
+      const dot = document.createElement('span');
+      dot.className = 'colour-dot';
+      if (team) dot.style.background = team.colour;
+      return dot;
+    };
+    const label = (text) => {
+      const el = document.createElement('div');
+      el.className = 'section-label t-group';
+      el.textContent = text;
+      return el;
+    };
+    const noneYet = () => {
+      const el = document.createElement('div');
+      el.className = 'empty';
+      el.textContent = 'None yet';
+      return el;
+    };
+    const byName = (x, y) => x.name.localeCompare(y.name);
+
+    // a) Leaderboards: top five, ties share a position.
+    const grid = document.createElement('div');
+    grid.className = 'lb-grid';
+    for (const [title, key] of [['TOP SCORERS', 'goals'], ['MOST ASSISTS', 'assists'], ['MOST SAVES', 'saves']]) {
+      const board = document.createElement('div');
+      board.className = 'lb';
+      board.append(label(title));
+      const ranked = stats.players.filter((st) => st[key] > 0).sort((x, y) => y[key] - x[key] || byName(x, y));
+      if (!ranked.length) board.append(noneYet());
+      for (const st of ranked.slice(0, 5)) {
+        const row = document.createElement('div');
+        row.className = 'player-row';
+        const pos = document.createElement('span');
+        pos.className = 'lb-pos num';
+        pos.textContent = String(1 + ranked.filter((o) => o[key] > st[key]).length);
+        const name = document.createElement('span');
+        name.className = 'player-name';
+        name.textContent = st.name;
+        const count = document.createElement('span');
+        count.className = 'lb-count num';
+        count.textContent = String(st[key]);
+        row.append(pos, dotFor(st.teamId), name);
+        if (key === 'goals') {
+          const per = document.createElement('span');
+          per.className = 'lb-per num';
+          per.textContent = `${st.goalsPerMatch} a match`;
+          row.append(per);
+        }
+        row.append(count);
+        board.append(row);
+      }
+      grid.append(board);
+    }
+    body.append(grid);
+
+    // b) Full player table, closed until its heading is tapped.
+    const showPens = v.matches.some((m) => m.status === 'finished' && v.scores[m.id] && v.scores[m.id].pens);
+    const toggle = document.createElement('button');
+    toggle.type = 'button';
+    toggle.className = 'section-label stat-toggle';
+    toggle.textContent = 'FULL PLAYER TABLE';
+    toggle.setAttribute('aria-expanded', String(v.tableOpen));
+    const wrap = document.createElement('div');
+    wrap.className = 'standings-wrap';
+    wrap.hidden = !v.tableOpen;
+    toggle.addEventListener('click', () => {
+      v.tableOpen = !v.tableOpen;
+      toggle.setAttribute('aria-expanded', String(v.tableOpen));
+      wrap.hidden = !v.tableOpen;
+    });
+    const table = document.createElement('table');
+    table.className = 'standings stats-table';
+    const headRow = document.createElement('tr');
+    const columns = ['Player', 'Apps', 'Mins', 'G', 'G/M', 'OG', 'A', 'S', 'F', 'Y', 'R'];
+    if (showPens) columns.push('Pens');
+    for (const text of columns) {
+      const th = document.createElement('th');
+      th.scope = 'col';
+      th.textContent = text;
+      if (text === 'Player') th.className = 'team';
+      headRow.append(th);
+    }
+    const thead = document.createElement('thead');
+    thead.append(headRow);
+    const tbody = document.createElement('tbody');
+    const sorted = [...stats.players].sort((x, y) => y.goals - x.goals || y.assists - x.assists || byName(x, y));
+    for (const st of sorted) {
+      const tr = document.createElement('tr');
+      const nameCell = document.createElement('td');
+      nameCell.className = 'team';
+      nameCell.append(dotFor(st.teamId), st.name);
+      tr.append(nameCell);
+      const values = [st.apps, st.mins, st.goals, st.goalsPerMatch, st.ownGoals, st.assists, st.saves, st.fouls, st.yellows, st.reds];
+      if (showPens) values.push(st.pens);
+      for (const value of values) {
+        const td = document.createElement('td');
+        td.className = 'num';
+        td.textContent = String(value);
+        tr.append(td);
+      }
+      tbody.append(tr);
+    }
+    table.append(thead, tbody);
+    wrap.append(table);
+    body.append(toggle, wrap);
+
+    // c) Discipline: anyone with a card or a foul.
+    body.append(label('DISCIPLINE'));
+    const carded = stats.players
+      .filter((st) => st.reds + st.yellows + st.fouls > 0)
+      .sort((x, y) => y.reds - x.reds || y.yellows - x.yellows || y.fouls - x.fouls || byName(x, y));
+    if (!carded.length) body.append(noneYet());
+    const discipline = document.createElement('div');
+    discipline.className = 'player-list';
+    for (const st of carded) {
+      const row = document.createElement('div');
+      row.className = 'player-row disc-row';
+      const name = document.createElement('span');
+      name.className = 'player-name';
+      name.textContent = st.name;
+      row.append(dotFor(st.teamId), name);
+      for (const [n, cls] of [[st.yellows, 'y'], [st.reds, 'r']]) {
+        if (!n) continue;
+        const sliver = document.createElement('span');
+        sliver.className = `mk-card ${cls}`;
+        if (n > 1) sliver.textContent = String(n);
+        sliver.title = `${n} ${cls === 'y' ? 'yellow' : 'red'}`;
+        row.append(sliver);
+      }
+      const fouls = document.createElement('span');
+      fouls.className = 'disc-fouls num';
+      fouls.textContent = `${st.fouls} ${st.fouls === 1 ? 'foul' : 'fouls'}`;
+      row.append(fouls);
+      discipline.append(row);
+    }
+    if (carded.length) body.append(discipline);
   }
 
   function renderTournament() {
@@ -2779,7 +3057,7 @@
       table.className = 'standings';
 
       const headRow = document.createElement('tr');
-      for (const label of ['#', 'Team', 'P', 'W', 'D', 'L', 'GF', 'GA', 'GD', 'Pts']) {
+      for (const label of ['#', 'Team', 'P', 'W', 'D', 'L', 'GF', 'GA', 'CS', 'GD', 'Pts']) {
         const th = document.createElement('th');
         th.scope = 'col';
         th.textContent = label;
@@ -2790,7 +3068,7 @@
       thead.append(headRow);
 
       const tbody = document.createElement('tbody');
-      v.rows.forEach((r, i) => {
+      v.standings.forEach((r, i) => {
         const tr = document.createElement('tr');
         const cell = (text, className) => {
           const td = document.createElement('td');
@@ -2806,6 +3084,9 @@
         dot.style.background = r.colour;
         teamCell.append(dot, r.name);
         for (const n of [r.p, r.w, r.d, r.l, r.gf, r.ga]) cell(String(n), 'num');
+        // Clean sheets come with the statistics; a dash if those did not load.
+        const teamStats = v.stats ? v.stats.teams.get(r.teamId) : null;
+        cell(teamStats ? String(teamStats.cleanSheets) : '—', 'num');
         cell(r.gd > 0 ? '+' + r.gd : String(r.gd), 'num');
         cell(String(r.pts), 'num pts');
         tbody.append(tr);
@@ -2814,7 +3095,7 @@
       table.append(thead, tbody);
       wrap.append(table);
       // No finished match yet means no rows: leave the bare table header out.
-      if (v.rows.length) body.append(wrap);
+      if (v.standings.length) body.append(wrap);
 
       // Every match in the tournament, grouped by state. An empty group is left out.
       const group = (label, rows, fill) => {
@@ -2836,6 +3117,9 @@
       group('RESULTS', v.matches.filter((m) => m.status === 'finished' || m.status === 'abandoned'), (list, rows) => {
         appendResultRows(list, rows, v.scores, { chips: false, del: false });
       });
+
+      // Statistics need a finished match; v.stats stays null until one has loaded.
+      if (v.stats) appendTournamentStats(body, v);
     }
 
     if (isScorer) {
@@ -3648,11 +3932,12 @@
 
   // A player's card events in chronological order, each with the strike count after it.
   // Same house rule as applyCardConsequence(): a red is a strike, every second yellow is a strike.
-  function cardStrikes(playerId) {
+  // `events` defaults to the open match; the tournament passes one match's slice.
+  function cardStrikes(playerId, events = liveEvents) {
     let yellows = 0;
     let strikes = 0;
     const out = [];
-    for (const e of liveEvents) {
+    for (const e of events) {
       if (e.event_type !== 'card' || e.player_id !== playerId) continue;
       if (e.detail === 'red') strikes += 1;
       else if (e.detail === 'yellow') {
@@ -3667,25 +3952,25 @@
   // Seconds lost to the sin bin. A flat 60 seconds by agreed rule, because no bin-return
   // event is stored: one strike is one bin served, and a second strike is a send-off that
   // followed that one bin.
-  function binStrikeSecs(playerId) {
-    const cards = cardStrikes(playerId);
+  function binStrikeSecs(playerId, events = liveEvents) {
+    const cards = cardStrikes(playerId, events);
     const strikes = cards.length ? cards[cards.length - 1].strikes : 0;
     return strikes >= 1 ? 60 : 0;
   }
 
   // Match time of the card that was the player's second strike, or null if never sent off.
-  function sendOffSecs(m, playerId) {
-    const second = cardStrikes(playerId).find((c) => c.strikes >= 2);
+  function sendOffSecs(m, playerId, events = liveEvents) {
+    const second = cardStrikes(playerId, events).find((c) => c.strikes >= 2);
     return second ? eventSecs(m, second.event) : null;
   }
 
   // Who began the match on the pitch, rebuilt backwards from the final state.
-  function startingIds() {
+  function startingIds(events = liveEvents, rows = livePlayers) {
     const ids = new Set();
-    for (const r of livePlayers) {
+    for (const r of rows) {
       if (r.on_pitch || r.sent_off || binSecsLeft(r) !== null) ids.add(r.player_id);
     }
-    const subs = liveEvents.filter((e) => e.event_type === 'sub');
+    const subs = events.filter((e) => e.event_type === 'sub');
     for (let i = subs.length - 1; i >= 0; i -= 1) {
       ids.delete(subs[i].player_id);          // came on
       ids.add(subs[i].assist_player_id);      // went off
@@ -3694,11 +3979,11 @@
   }
 
   // Whole minutes on the pitch. `starters` may be passed in to save rebuilding it per player.
-  function minutesPlayed(m, playerId, starters) {
-    const started = (starters || startingIds()).has(playerId);
+  function minutesPlayed(m, playerId, starters, events = liveEvents) {
+    const started = (starters || startingIds(events)).has(playerId);
     let open = started ? 0 : null;
     let total = 0;
-    for (const e of liveEvents) {
+    for (const e of events) {
       if (e.event_type !== 'sub') continue;
       if (e.player_id === playerId && open === null) {
         open = eventSecs(m, e);
@@ -3708,10 +3993,10 @@
       }
     }
     if (open !== null) {
-      const off = sendOffSecs(m, playerId);
+      const off = sendOffSecs(m, playerId, events);
       total += Math.max(0, (off !== null ? off : matchSecs(m)) - open);
     }
-    total = Math.max(0, total - binStrikeSecs(playerId));
+    total = Math.max(0, total - binStrikeSecs(playerId, events));
     return Math.round(total / 60);
   }
 
