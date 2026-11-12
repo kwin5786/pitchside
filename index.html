@@ -142,6 +142,34 @@
   .match-card-teams { display: flex; align-items: center; gap: 12px; }
   .match-card-meta { margin-left: auto; font-size: 11px; color: var(--muted); }
   #currentMatch:empty { display: none; }
+  .match-card-period { margin-left: auto; color: var(--muted); }
+  .match-card-clock { font-size: 18px; letter-spacing: 0.02em; color: var(--text); }
+  /* Match summary: date sub-headings and result rows */
+  .m-date { padding: 16px 0 6px; }
+  .m-date:first-child { padding-top: 4px; }
+  .m-row { display: flex; align-items: center; gap: 12px; min-width: 0; padding: 10px 0; }
+  .m-row + .m-row { border-top: 1px solid var(--border); }
+  .m-row.tappable { cursor: pointer; }
+  .m-when {
+    flex: none; width: 58px; display: flex; flex-direction: column; gap: 4px;
+    font-size: 11px; color: var(--muted); white-space: nowrap;
+  }
+  .m-tag { font-size: 10px; font-weight: 700; letter-spacing: 0.1em; }
+  .m-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+  .m-team { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 15px; }
+  .m-team .colour-dot { width: 12px; height: 12px; }
+  .m-team .player-name { flex: 1; white-space: nowrap; }
+  .m-team.won { font-weight: 700; color: #fff; }
+  .m-team.lost { color: var(--muted); }
+  .m-goals { flex: none; margin-left: auto; font-size: 17px; }
+  .m-chips { display: flex; flex-wrap: wrap; gap: 6px; min-width: 0; }
+  .m-chip {
+    max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    padding: 2px 8px; border: 1px solid var(--border); border-radius: 999px;
+    font-size: 10px; font-weight: 700; letter-spacing: 0.06em; color: var(--muted);
+  }
+  .m-chip.amber { border-color: var(--amber); color: var(--amber); }
+  .m-note { font-size: 12px; color: var(--muted); }
   .launch-brand { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 6px 0 2px; }
   .brand-logo { max-width: 120px; max-height: 60px; object-fit: contain; }
   .brand-logo[hidden] { display: none; }
@@ -1950,7 +1978,7 @@
   }
 
   let matches = [];
-  let matchScores = {};          // match id -> { a, b } for finished and abandoned matches
+  let matchScores = {};          // match id -> { a, b, pa, pb, pens } for every match that has kicked off
   let matchesLoaded = false;
 
   // Scores for the given match rows: match id -> { a, b, pa, pb, pens }. Throws on a query error.
@@ -1988,17 +2016,18 @@
 
   async function loadMatches() {
     try {
+      // No row cap, deliberately: the launch screen lists every match. Every score is
+      // recomputed from goal events on each load, which is fine at office-league scale.
       const { data, error } = await getClient()
         .from('matches')
-        .select('id, status, match_type, team_a_id, team_b_id, created_at')
-        .order('created_at', { ascending: false })
-        .limit(10);
+        .select('id, status, match_type, team_a_id, team_b_id, created_at, kicked_off_at, tournament_id, extra_secs, current_half, half_started_at, paused_secs, is_running, first_half_secs, second_half_secs, tournaments(name)')
+        .order('created_at', { ascending: false });
       if (error) throw error;
       matches = data || [];
       matchesLoaded = true;
 
       try {
-        matchScores = await buildScores(matches.filter((m) => m.status === 'finished' || m.status === 'abandoned'));
+        matchScores = await buildScores(matches.filter((m) => !['setup', 'ready'].includes(m.status)));
       } catch (err) {
         matchScores = {};
         console.error('Pitchside score load failed:', err);
@@ -2020,6 +2049,95 @@
     return teams.find((t) => t.id === id) || null;
   }
 
+  function matchResultTag(m, score) {
+    if (m.status === 'abandoned') return 'ABD';
+    if (score && score.pens) return 'PENS';
+    if (m.extra_secs > 0) return 'AET';
+    return 'FT';
+  }
+
+  function matchDate(m) {
+    return new Date(m.kicked_off_at || m.created_at);
+  }
+
+  // Local calendar day, so a late match is not filed under the next day's UTC date.
+  function matchDateKey(m) {
+    const d = matchDate(m);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  }
+
+  function matchDateLabel(m) {
+    return matchDate(m).toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
+  }
+
+  function matchTimeLabel(m) {
+    return matchDate(m).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+  }
+
+  function matchPeriodLabel(m) {
+    if (m.status === 'shootout') return 'PENALTIES';
+    if (m.status === 'halftime') return m.current_half === 2 ? 'BEFORE EXTRA TIME' : 'HALF TIME';
+    return m.current_half === 3 ? 'EXTRA TIME' : m.current_half === 2 ? '2ND HALF' : '1ST HALF';
+  }
+
+  // Tournament name (amber) or FRIENDLY, plus the match size.
+  function matchChips(m) {
+    const chips = document.createElement('div');
+    chips.className = 'm-chips';
+    const comp = document.createElement('span');
+    const tournamentName = m.tournaments && m.tournaments.name;
+    comp.className = tournamentName ? 'm-chip amber' : 'm-chip';
+    comp.textContent = tournamentName || 'FRIENDLY';
+    const size = document.createElement('span');
+    size.className = 'm-chip';
+    size.textContent = `${m.match_type}-a-side`;
+    chips.append(comp, size);
+    return chips;
+  }
+
+  // One team line: colour dot, name, goals. `goals` of null leaves the number out.
+  function matchTeamLine(team, goals, outcome) {
+    const line = document.createElement('div');
+    line.className = outcome ? `m-team ${outcome}` : 'm-team';
+    const dot = document.createElement('span');
+    dot.className = 'colour-dot';
+    if (team) dot.style.background = team.colour;
+    const name = document.createElement('span');
+    name.className = 'player-name';
+    name.textContent = team ? team.name : 'Unknown team';
+    line.append(dot, name);
+    if (goals !== null && goals !== undefined) {
+      const n = document.createElement('span');
+      n.className = 'm-goals num';
+      n.textContent = String(goals);
+      line.append(n);
+    }
+    return line;
+  }
+
+  // The launch card's own clock. Separate from the match-screen clockTimer: it runs only
+  // while the launch screen is showing and the current match is live.
+  let launchClockTimer = null;
+
+  function stopLaunchClock() {
+    if (launchClockTimer) {
+      clearInterval(launchClockTimer);
+      launchClockTimer = null;
+    }
+  }
+
+  function startLaunchClock() {
+    stopLaunchClock();
+    const m = matches.find((d) => d.status !== 'finished' && d.status !== 'abandoned');
+    if (currentScreen !== 'launch' || !m || m.status !== 'live') return;
+    const tick = () => {
+      const el = $('launchClock');
+      if (el) el.textContent = formatClock(elapsedSecs(m));
+    };
+    tick();
+    launchClockTimer = setInterval(tick, 1000);
+  }
+
   function renderMatches() {
     const current = matches.filter((m) => m.status !== 'finished' && m.status !== 'abandoned');
     const finished = matches.filter((m) => m.status === 'finished' || m.status === 'abandoned');
@@ -2033,6 +2151,7 @@
       const m = currentMatch;
       const teamA = teamById(m.team_a_id);
       const teamB = teamById(m.team_b_id);
+      const inPlay = ['live', 'halftime', 'shootout'].includes(m.status);
 
       const btn = document.createElement('button');
       btn.type = 'button';
@@ -2048,27 +2167,31 @@
 
       const head = document.createElement('div');
       head.className = 'match-card-head';
-      head.textContent = m.status === 'setup' ? 'UP NEXT'
+      const headText = document.createElement('span');
+      headText.textContent = m.status === 'setup' ? 'UP NEXT'
         : m.status === 'ready' ? 'READY'
         : 'LIVE NOW';   // live, halftime, shootout
+      head.append(headText);
+      if (inPlay) {
+        const period = document.createElement('span');
+        period.className = 'match-card-period';
+        period.textContent = matchPeriodLabel(m);
+        const clock = document.createElement('span');
+        clock.className = 'match-card-clock num';
+        clock.id = 'launchClock';
+        clock.textContent = formatClock(elapsedSecs(m));
+        head.append(period, clock);
+      }
 
-      const teamsRow = document.createElement('div');
-      teamsRow.className = 'match-card-teams';
+      const score = inPlay ? matchScores[m.id] : null;
+      const lines = document.createElement('div');
+      lines.className = 'm-body';
+      lines.append(
+        matchTeamLine(teamA, score ? score.a : null, ''),
+        matchTeamLine(teamB, score ? score.b : null, '')
+      );
 
-      const dot = document.createElement('span');
-      dot.className = 'colour-dot';
-      if (teamA) dot.style.background = teamA.colour;
-
-      const name = document.createElement('span');
-      name.className = 'player-name';
-      name.textContent = `${teamA ? teamA.name : 'Unknown team'} v ${teamB ? teamB.name : 'Unknown team'}`;
-
-      const meta = document.createElement('span');
-      meta.className = 'match-card-meta';
-      meta.textContent = `${m.match_type}-a-side`;
-
-      teamsRow.append(dot, name, meta);
-      btn.append(head, teamsRow);
+      btn.append(head, lines, matchChips(m));
       card.append(btn);
     }
 
@@ -2080,38 +2203,70 @@
       empty.className = 'empty';
       empty.textContent = 'No finished matches yet';
       list.append(empty);
-      return;
     }
 
+    let dateKey = null;
     for (const m of finished) {
       const teamA = teamById(m.team_a_id);
       const teamB = teamById(m.team_b_id);
+      const score = matchScores[m.id];
+
+      if (matchDateKey(m) !== dateKey) {
+        dateKey = matchDateKey(m);
+        const heading = document.createElement('div');
+        heading.className = 'section-label m-date';
+        heading.textContent = matchDateLabel(m);
+        list.append(heading);
+      }
 
       const row = document.createElement('div');
-      row.className = 'player-row';
+      row.className = 'm-row';
 
-      const dot = document.createElement('span');
-      dot.className = 'colour-dot';
-      if (teamA) dot.style.background = teamA.colour;
+      const when = document.createElement('div');
+      when.className = 'm-when';
+      const time = document.createElement('span');
+      time.textContent = matchTimeLabel(m);
+      const tag = document.createElement('span');
+      tag.className = 'm-tag';
+      tag.textContent = matchResultTag(m, score);
+      when.append(time, tag);
 
-      const name = document.createElement('span');
-      name.className = 'player-name';
-      const score = matchScores[m.id];
-      name.textContent = score
-        ? `${teamA ? teamA.name : 'Unknown team'} ${score.a} – ${score.b} ${teamB ? teamB.name : 'Unknown team'}`
-        : `${teamA ? teamA.name : 'Unknown team'} v ${teamB ? teamB.name : 'Unknown team'}`;
+      // Winner by goals, or by the shootout when the goals are level. A draw or an
+      // abandoned match dims neither line.
+      let winner = '';
+      if (score && m.status !== 'abandoned') {
+        if (score.a !== score.b) winner = score.a > score.b ? 'a' : 'b';
+        else if (score.pens && score.pa !== score.pb) winner = score.pa > score.pb ? 'a' : 'b';
+      }
 
-      const status = document.createElement('span');
-      status.style.cssText = 'margin-left:auto; color:var(--muted); font-size:13px; white-space:nowrap;';
-      status.textContent = m.status === 'finished' && score && score.pens ? `Pens ${score.pa} – ${score.pb}`
-        : m.status === 'finished' ? 'Full time'
-        : m.status === 'abandoned' ? 'Abandoned'
-        : String(m.status || '').charAt(0).toUpperCase() + String(m.status || '').slice(1);
+      const body = document.createElement('div');
+      body.className = 'm-body';
+      body.append(
+        matchTeamLine(teamA, score ? score.a : null, winner ? (winner === 'a' ? 'won' : 'lost') : ''),
+        matchTeamLine(teamB, score ? score.b : null, winner ? (winner === 'b' ? 'won' : 'lost') : ''),
+        matchChips(m)
+      );
 
-      row.append(dot, name, status);
+      const noteText = m.status === 'abandoned' ? 'Abandoned'
+        : score && score.pens ? `Penalties ${score.pa} – ${score.pb}`
+        : m.extra_secs > 0 ? 'After extra time'
+        : '';
+      if (noteText) {
+        const note = document.createElement('div');
+        note.className = 'm-note';
+        note.textContent = noteText;
+        body.append(note);
+      }
+
+      row.append(when, body);
       if (state.role === 'scorer') {
-        name.style.cursor = 'pointer';
-        name.addEventListener('click', () => openMatch(m));
+        row.classList.add('tappable');
+        row.setAttribute('role', 'button');
+        row.tabIndex = 0;
+        row.addEventListener('click', () => openMatch(m));
+        row.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter' && e.target === row) openMatch(m);
+        });
         const del = document.createElement('button');
         del.type = 'button';
         del.className = 'log-del';
@@ -2121,6 +2276,8 @@
       }
       list.append(row);
     }
+
+    startLaunchClock();
   }
 
   function confirmDeleteMatch(m) {
@@ -2937,7 +3094,7 @@
       // The launch list only carries summary columns; the clock needs the full row.
       const { data: row, error: matchError } = await getClient()
         .from('matches')
-        .select('id, status, match_type, team_a_id, team_b_id, created_at, first_half_secs, break_secs, second_half_secs, current_half, half_started_at, paused_secs, is_running, team_a_side, extra_secs')
+        .select('id, status, match_type, team_a_id, team_b_id, created_at, first_half_secs, break_secs, second_half_secs, current_half, half_started_at, paused_secs, is_running, team_a_side, extra_secs, kicked_off_at, tournament_id')
         .eq('id', match.id)
         .single();
       if (matchError) throw matchError;
@@ -3302,7 +3459,8 @@
       renderMatch();
       return;
     }
-    await patchMatch({ status: 'live', current_half: 1, half_started_at: new Date().toISOString(), paused_secs: 0, is_running: true });
+    const stamp = liveMatch.kicked_off_at ? {} : { kicked_off_at: new Date().toISOString() };
+    await patchMatch({ status: 'live', current_half: 1, half_started_at: new Date().toISOString(), paused_secs: 0, is_running: true, ...stamp });
   }
 
   function togglePause() {
@@ -4607,7 +4765,10 @@
       stopClockTimer();
       stopSound();
     }
+    if (name !== 'launch') stopLaunchClock();
     currentScreen = name;
+    // Coming back to the launch screen does not re-render the card, so the card clock restarts here.
+    if (name === 'launch') startLaunchClock();
     document.body.dataset.screen = name;
     for (const key of Object.keys(SCREENS)) {
       $(SCREENS[key]).hidden = key !== name;
