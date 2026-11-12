@@ -177,6 +177,79 @@
   .credit { text-align: center; font-size: 11px; color: var(--muted); padding-top: 4px; }
   body[data-screen="launch"] .brand { visibility: hidden; }
 
+  /* ---------- Match summary screen ---------- */
+  .sum-head { display: flex; flex-direction: column; gap: 8px; padding-bottom: 14px; }
+  .sum-head .m-team { font-size: 18px; }
+  .sum-head .m-team .colour-dot { width: 14px; height: 14px; }
+  .sum-head .m-goals { font-size: 24px; }
+  .sum-result { font-size: 10px; font-weight: 700; letter-spacing: 0.12em; color: var(--green); }
+  .sum-tabs { display: flex; gap: 8px; padding-bottom: 12px; }
+  .sum-tabs .toggle { flex: 1; min-width: 0; font-size: 11px; font-weight: 700; letter-spacing: 0.08em; }
+  .sum-tabs:empty { display: none; }
+  #summaryControls { margin-top: 14px; }
+  /* Timeline: a centre rail, team A to its left and team B to its right */
+  .tl { position: relative; display: flex; flex-direction: column; gap: 6px; }
+  .tl::before {
+    content: ''; position: absolute; top: 0; bottom: 0; left: 50%;
+    width: 2px; margin-left: -1px; background: var(--border);
+  }
+  .tl-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); column-gap: 14px; }
+  /* A cell stacks: minute (outside edge) and running score (rail side), the event, its detail, Delete */
+  .tl-cell {
+    grid-column: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px;
+    padding: 6px 8px; border-radius: 8px; text-align: right;
+  }
+  .tl-cell.b { grid-column: 2; text-align: left; }
+  .tl-cell.goal { background: rgba(46, 125, 79, 0.22); }
+  .tl-top { display: flex; align-items: baseline; justify-content: space-between; gap: 6px; }
+  .tl-cell.b .tl-top { flex-direction: row-reverse; }
+  .tl-min {
+    flex: none; font-family: 'Barlow Condensed', sans-serif; font-size: 12px; font-weight: 700;
+    color: var(--muted); white-space: nowrap;
+  }
+  .tl-score { flex: none; font-size: 15px; font-weight: 700; color: #fff; white-space: nowrap; }
+  .tl-line { display: flex; align-items: center; gap: 5px; min-width: 0; font-size: 13px; }
+  .tl-cell.a .tl-line { flex-direction: row-reverse; }
+  .tl-line .mk-card { flex: none; }
+  .tl-line .player-name { white-space: nowrap; }
+  .tl-detail {
+    font-size: 11px; color: var(--muted);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  /* Delete sits on the outside edge, under the minute */
+  .tl-cell .log-del { align-self: flex-start; min-height: 28px; margin-top: 2px; }
+  .tl-cell.b .log-del { align-self: flex-end; }
+  .tl-mark { position: relative; display: flex; justify-content: center; padding: 4px 0; }
+  .tl-mark span {
+    padding: 3px 12px; border: 1px solid var(--border); border-radius: 999px; background: var(--panel);
+    font-size: 10px; font-weight: 700; letter-spacing: 0.12em; color: var(--muted);
+  }
+  /* Line-ups: one block per team, STARTED then CAME ON */
+  .lu-team + .lu-team { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--border); }
+  .lu-head { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 16px; font-weight: 700; color: #fff; }
+  .lu-head .colour-dot { width: 14px; height: 14px; }
+  .lu-group { padding: 12px 0 4px; }
+  /* Left padding leaves room for the goal pill and card slivers that overhang the badge */
+  .lu-row { display: flex; align-items: center; gap: 10px; min-width: 0; min-height: var(--touch); padding: 6px 0 6px 8px; }
+  .lu-row .player-name { flex: 0 1 auto; }
+  .lu-tags { flex: none; display: flex; align-items: center; gap: 4px; }
+  .lu-tags .badge-tag { position: static; }
+  .lu-tags .badge-tag.gk { box-shadow: 0 0 0 1px var(--border); }
+  .lu-off { font-size: 9px; font-weight: 700; letter-spacing: 0.08em; color: var(--muted); white-space: nowrap; }
+  .lu-mins { flex: none; margin-left: auto; padding-left: 6px; font-size: 16px; color: var(--muted); }
+  .sum-note { margin: 16px 0 0; font-size: 11px; color: var(--muted); }
+  /* Stats: two counts either side of the label, one split bar underneath */
+  .st-list { display: flex; flex-direction: column; gap: 14px; }
+  .st-top { display: flex; align-items: baseline; gap: 8px; }
+  .st-num { flex: none; min-width: 28px; font-size: 18px; font-weight: 700; color: #fff; }
+  .st-num:last-child { text-align: right; }
+  .st-label {
+    flex: 1; min-width: 0; text-align: center; font-size: 12px; color: var(--muted);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .st-bar { display: flex; gap: 2px; height: 6px; margin-top: 6px; border-radius: 999px; overflow: hidden; background: var(--border); }
+  .st-bar span { flex: 1 1 0; min-width: 0; }
+
   /* ---------- Splash ---------- */
   .splash {
     position: fixed; inset: 0; z-index: 200; background: var(--bg);
@@ -864,6 +937,21 @@
       </div>
       <div class="panel-foot" id="matchStatus"></div>
     </section>
+
+    <section class="screen" id="screenSummary" hidden>
+    <section class="panel" id="summaryPanel">
+      <div class="sum-head">
+        <div class="m-body" id="summaryTeams"></div>
+        <div class="m-note" id="summaryPens" hidden></div>
+        <div class="sum-result" id="summaryResult"></div>
+        <div id="summaryChips"></div>
+      </div>
+      <div class="sum-tabs" id="summaryTabs"></div>
+      <div id="summaryBody"></div>
+      <div class="match-controls" id="summaryControls"></div>
+      <div class="panel-foot" id="summaryStatus"></div>
+    </section>
+    </section>
   </main>
 </div>
 
@@ -1064,8 +1152,9 @@
     if (!isScorer) closePlayerPanel();
     renderPlayers();
     if (!isScorer) closeTeamPanel();
-    // Viewers may stay on the tournament screen; every other screen is scorer-only.
-    if (!isScorer && currentScreen !== 'launch' && currentScreen !== 'tournament') showScreen('launch');
+    // Viewers may stay on the tournament and summary screens; every other screen is scorer-only.
+    if (!isScorer && currentScreen !== 'launch' && currentScreen !== 'tournament' && currentScreen !== 'summary') showScreen('launch');
+    if (currentScreen === 'summary' && liveMatch) renderSummary();
     renderTeams();
     if (!isScorer) closeTournamentForm();
     renderTournament();
@@ -2259,14 +2348,15 @@
       }
 
       row.append(when, body);
+      // Scorer and viewer alike can read a summary; only the scorer gets Delete.
+      row.classList.add('tappable');
+      row.setAttribute('role', 'button');
+      row.tabIndex = 0;
+      row.addEventListener('click', () => openSummary(m));
+      row.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && e.target === row) openSummary(m);
+      });
       if (state.role === 'scorer') {
-        row.classList.add('tappable');
-        row.setAttribute('role', 'button');
-        row.tabIndex = 0;
-        row.addEventListener('click', () => openMatch(m));
-        row.addEventListener('keydown', (e) => {
-          if (e.key === 'Enter' && e.target === row) openMatch(m);
-        });
         const del = document.createElement('button');
         del.type = 'button';
         del.className = 'log-del';
@@ -3114,6 +3204,499 @@
     showScreen('match');
   }
 
+  // ---------- Match summary ----------
+  // Reuses liveMatch, livePlayers and liveEvents on purpose: scoreFor(), pensFor(), eventText()
+  // and the rest all read them, so the summary needs no maths of its own.
+  let summaryTab = 'timeline';
+  let summaryOpening = false;    // true while openSummary() loads, before the screen switches
+
+  function summaryShowing() {
+    return summaryOpening || currentScreen === 'summary';
+  }
+
+  function setSummaryStatus(text, isError) {
+    $('summaryStatus').textContent = text;
+    $('summaryStatus').className = isError ? 'panel-foot error' : 'panel-foot';
+  }
+
+  // openMatch() without the clock timer and without the pitch.
+  async function openSummary(match) {
+    liveMatch = match;
+    livePlayers = [];
+    matchBusy = false;
+    summaryTab = 'timeline';
+    summaryOpening = true;
+    setSummaryStatus('', false);
+
+    try {
+      await ensureLibrary();
+      if (!playersLoaded) throw new Error('The player library has not loaded. Check the connection and open the match again.');
+      const { data: row, error: matchError } = await getClient()
+        .from('matches')
+        .select('id, status, match_type, team_a_id, team_b_id, created_at, first_half_secs, break_secs, second_half_secs, current_half, half_started_at, paused_secs, is_running, team_a_side, extra_secs, kicked_off_at, tournament_id')
+        .eq('id', match.id)
+        .single();
+      if (matchError) throw matchError;
+      liveMatch = row;
+
+      await reloadLivePlayers();
+
+      liveEvents = [];
+      await loadEvents();
+    } catch (err) {
+      setSummaryStatus(describeError(err), true);
+      console.error('Pitchside summary open failed:', err);
+    }
+
+    summaryOpening = false;
+    renderSummary();
+    showScreen('summary');
+  }
+
+  const SUMMARY_TABS = [['timeline', 'TIMELINE', renderTimelineTab], ['lineups', 'LINE-UPS', renderLineupsTab], ['stats', 'STATS', renderStatsTab]];
+
+  function renderSummary() {
+    const m = liveMatch;
+    if (!m) return;
+    const teamA = teamById(m.team_a_id);
+    const teamB = teamById(m.team_b_id);
+    const inPlay = ['live', 'halftime', 'shootout'].includes(m.status);
+    const a = scoreFor(m.team_a_id);
+    const b = scoreFor(m.team_b_id);
+    const pa = pensFor(m.team_a_id);
+    const pb = pensFor(m.team_b_id);
+    const hadPens = liveEvents.some((e) => e.event_type === 'pen');
+
+    // Same treatment as the launch results rows: winner by goals, or by the shootout when
+    // the goals are level; a draw or an abandoned match dims neither.
+    let winner = '';
+    if (m.status === 'finished') {
+      if (a !== b) winner = a > b ? 'a' : 'b';
+      else if (hadPens && pa !== pb) winner = pa > pb ? 'a' : 'b';
+    }
+    $('summaryTeams').replaceChildren(
+      matchTeamLine(teamA, a, winner ? (winner === 'a' ? 'won' : 'lost') : ''),
+      matchTeamLine(teamB, b, winner ? (winner === 'b' ? 'won' : 'lost') : '')
+    );
+
+    $('summaryPens').hidden = !hadPens;
+    $('summaryPens').textContent = hadPens ? `Penalties ${pa} – ${pb}` : '';
+
+    $('summaryResult').textContent = m.status === 'finished' ? 'FULL TIME'
+      : m.status === 'abandoned' ? 'ABANDONED'
+      : inPlay ? matchPeriodLabel(m)
+      : 'NOT STARTED';
+
+    // The full match row carries only tournament_id; the name comes from what is already loaded.
+    const listed = matches.find((d) => d.id === m.id);
+    const tournament = tournaments.find((t) => t.id === m.tournament_id);
+    $('summaryChips').replaceChildren(matchChips({
+      match_type: m.match_type,
+      tournaments: tournament ? { name: tournament.name } : listed ? listed.tournaments : null
+    }));
+
+    // One button per tab that has a renderer.
+    const tabs = SUMMARY_TABS.filter((t) => typeof t[2] === 'function');
+    const active = tabs.find((t) => t[0] === summaryTab) || tabs[0];
+    const bar = $('summaryTabs');
+    bar.replaceChildren();
+    for (const [key, label] of tabs) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'toggle';
+      btn.textContent = label;
+      btn.setAttribute('aria-pressed', String(!!active && key === active[0]));
+      btn.addEventListener('click', () => {
+        summaryTab = key;
+        renderSummary();
+      });
+      bar.append(btn);
+    }
+
+    const body = $('summaryBody');
+    body.replaceChildren();
+    if (active) active[2](body);
+
+    const controls = $('summaryControls');
+    controls.replaceChildren();
+    const back = document.createElement('button');
+    back.type = 'button';
+    if (inPlay) {
+      back.textContent = 'Back to match';
+      back.addEventListener('click', () => openMatch(liveMatch));
+    } else {
+      back.textContent = 'Back to launch';
+      back.addEventListener('click', () => showScreen('launch'));
+    }
+    controls.append(back);
+  }
+
+  // Centre rail: team A's events on the left, team B's on the right, the minute on the outside edge.
+  function renderTimelineTab(body) {
+    const m = liveMatch;
+    if (!liveEvents.length) {
+      const empty = document.createElement('div');
+      empty.className = 'empty';
+      empty.textContent = 'No events yet';
+      body.append(empty);
+      return;
+    }
+    const inPlay = ['live', 'halftime', 'shootout'].includes(m.status);
+    const canDelete = state.role === 'scorer' && inPlay;
+
+    // Built oldest first, so the running score and the markers are right; reversed for display
+    // while the match is still going. liveEvents is already in period, clock, created order.
+    const items = [{ mark: 'KICK OFF' }];
+    let a = 0;
+    let b = 0;
+    let lastPeriod = 1;
+    let halfTimeDone = false;
+    const halfTime = () => {
+      if (!halfTimeDone) items.push({ mark: 'HALF TIME' });
+      halfTimeDone = true;
+    };
+    for (const e of liveEvents) {
+      const period = e.period || 1;
+      if (period >= 2 && lastPeriod < 2) halfTime();
+      if (period >= 3 && lastPeriod < 3) items.push({ mark: 'EXTRA TIME' });
+      if (period >= 4 && lastPeriod < 4) items.push({ mark: 'PENALTIES' });
+      lastPeriod = Math.max(lastPeriod, period);
+
+      const own = e.event_type === 'goal' && String(e.detail || '').includes('own');
+      // An own goal sits on the side of the team that gained it; the stored team_id is untouched.
+      const sideA = own ? e.team_id !== m.team_a_id : e.team_id === m.team_a_id;
+      let score = '';
+      if (e.event_type === 'goal') {
+        if (sideA) a += 1;
+        else b += 1;
+        score = `${a} – ${b}`;
+      }
+      items.push({ event: e, own, sideA, score });
+    }
+    // No second-half event yet, but the first half is over.
+    if (m.current_half >= 2) halfTime();
+    if (m.status === 'finished') items.push({ mark: 'FULL TIME' });
+    else if (m.status === 'abandoned') items.push({ mark: 'ABANDONED' });
+    if (inPlay) items.reverse();
+
+    const rail = document.createElement('div');
+    rail.className = 'tl';
+    for (const item of items) {
+      if (item.mark) {
+        const mark = document.createElement('div');
+        mark.className = 'tl-mark';
+        const label = document.createElement('span');
+        label.textContent = item.mark;
+        mark.append(label);
+        rail.append(mark);
+        continue;
+      }
+      const e = item.event;
+      const row = document.createElement('div');
+      row.className = 'tl-row';
+      const cell = document.createElement('div');
+      cell.className = `tl-cell ${item.sideA ? 'a' : 'b'}`;
+      if (e.event_type === 'goal') cell.classList.add('goal');
+
+      const min = document.createElement('span');
+      min.className = 'tl-min';
+      min.textContent = e.period === 4 ? 'PEN' : `${periodLabel(e.period)} ${formatClock(e.clock_secs || 0)}`;
+
+      // eventText(), split at its ' · ' separators so each part can ellipsis on its own line.
+      const parts = (item.own ? `Own goal — ${playerName(e.player_id)}` : eventText(e)).split(' · ');
+      const top = document.createElement('div');
+      top.className = 'tl-top';
+      top.append(min);
+      if (item.score) {
+        const score = document.createElement('span');
+        score.className = 'tl-score num';
+        score.textContent = item.score;
+        top.append(score);
+      }
+      const line = document.createElement('div');
+      line.className = 'tl-line';
+      if (e.event_type === 'card') {
+        const sliver = document.createElement('span');
+        sliver.className = `mk-card ${e.detail === 'red' ? 'r' : 'y'}`;
+        line.append(sliver);
+      }
+      const what = document.createElement('span');
+      what.className = 'player-name';
+      what.textContent = parts[0];
+      line.append(what);
+      cell.append(top, line);
+      if (parts.length > 1) {
+        const detail = document.createElement('div');
+        detail.className = 'tl-detail';
+        detail.textContent = parts.slice(1).join(' · ');
+        cell.append(detail);
+      }
+      if (canDelete) {
+        const del = document.createElement('button');
+        del.type = 'button';
+        del.className = 'log-del';
+        del.textContent = 'Delete';
+        del.addEventListener('click', () => confirmDeleteEvent(e));
+        cell.append(del);
+      }
+      row.append(cell);
+      rail.append(row);
+    }
+    body.append(rail);
+  }
+
+  // ----- Match-long timing, for minutes played -----
+  // Period lengths come from the match row, not from measured time: half_started_at is
+  // re-stamped each period, so the real length of an earlier period cannot be recovered.
+  function periodSecs(m, period) {
+    if (period >= 4) return 0;                       // a shootout costs nobody minutes
+    if (period > (m.current_half || 0)) return 0;    // not reached yet
+    // The period in progress reads from the clock, so a live summary is right.
+    if ((m.status === 'live' || m.status === 'halftime') && period === m.current_half) return elapsedSecs(m);
+    if (period === 1) return m.first_half_secs || 0;
+    if (period === 2) return m.second_half_secs || 0;
+    return m.extra_secs || 0;
+  }
+
+  function periodOffset(m, period) {
+    let total = 0;
+    for (let p = 1; p < period; p += 1) total += periodSecs(m, p);
+    return total;
+  }
+
+  function eventSecs(m, e) {
+    return periodOffset(m, e.period || 1) + (e.clock_secs || 0);
+  }
+
+  function matchSecs(m) {
+    return periodOffset(m, 4);
+  }
+
+  // A player's card events in chronological order, each with the strike count after it.
+  // Same house rule as applyCardConsequence(): a red is a strike, every second yellow is a strike.
+  function cardStrikes(playerId) {
+    let yellows = 0;
+    let strikes = 0;
+    const out = [];
+    for (const e of liveEvents) {
+      if (e.event_type !== 'card' || e.player_id !== playerId) continue;
+      if (e.detail === 'red') strikes += 1;
+      else if (e.detail === 'yellow') {
+        yellows += 1;
+        if (yellows % 2 === 0) strikes += 1;
+      }
+      out.push({ event: e, strikes });
+    }
+    return out;
+  }
+
+  // Seconds lost to the sin bin. A flat 60 seconds by agreed rule, because no bin-return
+  // event is stored: one strike is one bin served, and a second strike is a send-off that
+  // followed that one bin.
+  function binStrikeSecs(playerId) {
+    const cards = cardStrikes(playerId);
+    const strikes = cards.length ? cards[cards.length - 1].strikes : 0;
+    return strikes >= 1 ? 60 : 0;
+  }
+
+  // Match time of the card that was the player's second strike, or null if never sent off.
+  function sendOffSecs(m, playerId) {
+    const second = cardStrikes(playerId).find((c) => c.strikes >= 2);
+    return second ? eventSecs(m, second.event) : null;
+  }
+
+  // Who began the match on the pitch, rebuilt backwards from the final state.
+  function startingIds() {
+    const ids = new Set();
+    for (const r of livePlayers) {
+      if (r.on_pitch || r.sent_off || binSecsLeft(r) !== null) ids.add(r.player_id);
+    }
+    const subs = liveEvents.filter((e) => e.event_type === 'sub');
+    for (let i = subs.length - 1; i >= 0; i -= 1) {
+      ids.delete(subs[i].player_id);          // came on
+      ids.add(subs[i].assist_player_id);      // went off
+    }
+    return ids;
+  }
+
+  // Whole minutes on the pitch. `starters` may be passed in to save rebuilding it per player.
+  function minutesPlayed(m, playerId, starters) {
+    const started = (starters || startingIds()).has(playerId);
+    let open = started ? 0 : null;
+    let total = 0;
+    for (const e of liveEvents) {
+      if (e.event_type !== 'sub') continue;
+      if (e.player_id === playerId && open === null) {
+        open = eventSecs(m, e);
+      } else if (e.assist_player_id === playerId && open !== null) {
+        total += Math.max(0, eventSecs(m, e) - open);
+        open = null;
+      }
+    }
+    if (open !== null) {
+      const off = sendOffSecs(m, playerId);
+      total += Math.max(0, (off !== null ? off : matchSecs(m)) - open);
+    }
+    total = Math.max(0, total - binStrikeSecs(playerId));
+    return Math.round(total / 60);
+  }
+
+  function renderLineupsTab(body) {
+    const m = liveMatch;
+    const starters = startingIds();
+    const cameOn = new Set(liveEvents.filter((e) => e.event_type === 'sub').map((e) => e.player_id));
+    const byKeeperThenName = (x, y) => (y.is_keeper ? 1 : 0) - (x.is_keeper ? 1 : 0) || x.player.name.localeCompare(y.player.name);
+
+    for (const teamId of [m.team_a_id, m.team_b_id]) {
+      const team = teamById(teamId);
+      const swatch = team ? TEAM_COLOURS.find((c) => c.hex === team.colour) : null;
+      const ink = swatch ? swatch.ink : '#fff';
+      const rows = sideOf(teamId);
+
+      const block = document.createElement('div');
+      block.className = 'lu-team';
+      const head = document.createElement('div');
+      head.className = 'lu-head';
+      const dot = document.createElement('span');
+      dot.className = 'colour-dot';
+      if (team) dot.style.background = team.colour;
+      const teamName = document.createElement('span');
+      teamName.className = 'player-name';
+      teamName.textContent = team ? team.name : 'Unknown team';
+      head.append(dot, teamName);
+      block.append(head);
+
+      if (!rows.length) {
+        const empty = document.createElement('div');
+        empty.className = 'empty';
+        empty.textContent = 'No line-up recorded';
+        block.append(empty);
+        body.append(block);
+        continue;
+      }
+
+      const groups = [
+        ['STARTED', rows.filter((r) => starters.has(r.player_id)).sort(byKeeperThenName)],
+        ['CAME ON', rows.filter((r) => !starters.has(r.player_id) && cameOn.has(r.player_id)).sort(byKeeperThenName)]
+      ];
+      for (const [label, list] of groups) {
+        if (label === 'CAME ON' && !list.length) continue;
+        const groupLabel = document.createElement('div');
+        groupLabel.className = 'section-label lu-group';
+        groupLabel.textContent = label;
+        block.append(groupLabel);
+
+        for (const r of list) {
+          const row = document.createElement('div');
+          row.className = 'lu-row';
+
+          const wrap = document.createElement('div');
+          wrap.className = 'badge-wrap';
+          const badge = document.createElement('span');
+          badge.className = 'initials';
+          badge.textContent = initials(r.player.name);
+          if (team) badge.style.background = team.colour;
+          badge.style.color = ink;
+          wrap.append(badge);
+          appendMarkers(wrap, r.player_id);
+
+          const name = document.createElement('span');
+          name.className = 'player-name';
+          name.textContent = r.player.name;
+
+          const tags = document.createElement('span');
+          tags.className = 'lu-tags';
+          for (const [on, cls, text] of [[r.is_keeper, 'gk', 'GK'], [r.is_captain, 'c', 'C'], [r.player.gender === 'F', 'f', 'F']]) {
+            if (!on) continue;
+            const tag = document.createElement('span');
+            tag.className = `badge-tag ${cls}`;
+            tag.textContent = text;
+            tags.append(tag);
+          }
+          if (r.sent_off) {
+            const off = document.createElement('span');
+            off.className = 'lu-off';
+            off.textContent = 'SENT OFF';
+            tags.append(off);
+          }
+
+          const mins = document.createElement('span');
+          mins.className = 'lu-mins num';
+          mins.textContent = `${minutesPlayed(m, r.player_id, starters)}'`;
+
+          row.append(wrap, name, tags, mins);
+          block.append(row);
+        }
+      }
+      body.append(block);
+    }
+
+    const note = document.createElement('p');
+    note.className = 'sum-note';
+    note.textContent = 'Minutes are counted from the set period lengths. Each sin bin is counted as one minute off.';
+    body.append(note);
+  }
+
+  // Straight counts from liveEvents. Nothing the event log cannot prove.
+  function renderStatsTab(body) {
+    const m = liveMatch;
+    const teamA = teamById(m.team_a_id);
+    const teamB = teamById(m.team_b_id);
+    const count = (teamId, test) => liveEvents.filter((e) => e.team_id === teamId && test(e)).length;
+    const both = (test) => [count(m.team_a_id, test), count(m.team_b_id, test)];
+    const isOwn = (e) => e.event_type === 'goal' && String(e.detail || '').includes('own');
+
+    const stats = [
+      ['Goals', [scoreFor(m.team_a_id), scoreFor(m.team_b_id)]],
+      ['Assists', both((e) => e.event_type === 'goal' && e.assist_player_id !== null && e.assist_player_id !== undefined)],
+      ['Own goals', both(isOwn)],
+      ['Saves', both((e) => e.event_type === 'save')],
+      ['Fouls', both((e) => e.event_type === 'foul')],
+      ['Yellow cards', both((e) => e.event_type === 'card' && e.detail === 'yellow')],
+      ['Red cards', both((e) => e.event_type === 'card' && e.detail === 'red')],
+      ['Substitutions', both((e) => e.event_type === 'sub')]
+    ];
+    if (liveEvents.some((e) => e.event_type === 'pen')) {
+      stats.push(['Penalties scored', [pensFor(m.team_a_id), pensFor(m.team_b_id)]]);
+    }
+
+    const list = document.createElement('div');
+    list.className = 'st-list';
+    for (const [label, [a, b]] of stats) {
+      const row = document.createElement('div');
+      row.className = 'st-row';
+
+      const top = document.createElement('div');
+      top.className = 'st-top';
+      const left = document.createElement('span');
+      left.className = 'st-num num';
+      left.textContent = String(a);
+      const name = document.createElement('span');
+      name.className = 'st-label';
+      name.textContent = label;
+      const right = document.createElement('span');
+      right.className = 'st-num num';
+      right.textContent = String(b);
+      top.append(left, name, right);
+
+      // One bar split between the two teams; empty and neutral when both are zero.
+      const bar = document.createElement('div');
+      bar.className = 'st-bar';
+      if (a + b > 0) {
+        for (const [n, team] of [[a, teamA], [b, teamB]]) {
+          if (n === 0) continue;
+          const part = document.createElement('span');
+          part.style.flexGrow = String(n);
+          part.style.background = team ? team.colour : 'var(--muted)';
+          bar.append(part);
+        }
+      }
+      row.append(top, bar);
+      list.append(row);
+    }
+    body.append(list);
+  }
+
   function otherTeamId(teamId) {
     return teamId === liveMatch.team_a_id ? liveMatch.team_b_id : liveMatch.team_a_id;
   }
@@ -3427,6 +4010,7 @@
         }), false);
       }
     } else if (m.status === 'finished' || m.status === 'abandoned') {
+      addControl('Match summary', () => openSummary(liveMatch), false);
       addControl('Back to launch', () => showScreen('launch'), false);
     }
 
@@ -3979,6 +4563,10 @@
       closeMenu();
       openLog();
     });
+    add('Match summary', () => {
+      closeMenu();
+      openSummary(liveMatch);
+    });
     add(soundOn ? 'Sound: on' : 'Sound: off', () => {
       closeMenu();
       setSound(!soundOn);
@@ -4048,9 +4636,12 @@
         .order('created_at', { ascending: true });
       if (error) throw error;
       liveEvents = data || [];
-      renderMatch();
+      // The redraw follows the screen that is showing (or the summary that is being opened).
+      if (summaryShowing()) renderSummary();
+      else renderMatch();
     } catch (err) {
-      setMatchStatus(describeError(err), true);
+      if (summaryShowing()) setSummaryStatus(describeError(err), true);
+      else setMatchStatus(describeError(err), true);
       console.error('Pitchside event load failed:', err);
     }
   }
@@ -4538,9 +5129,12 @@
       if (error) throw error;
       await loadEvents();
       if (e.event_type === 'card' && e.player_id) await undoCardConsequence(e.player_id, e.team_id);
-      openLog();
+      // Refresh whichever view the delete was made from.
+      if (currentScreen === 'summary') renderSummary();
+      else if ($('logOverlay').classList.contains('open')) openLog();
     } catch (err) {
-      $('logMsg').textContent = describeError(err);
+      if (currentScreen === 'summary') setSummaryStatus(describeError(err), true);
+      else $('logMsg').textContent = describeError(err);
       console.error('Pitchside event delete failed:', err);
     }
   }
@@ -4757,7 +5351,7 @@
   }
 
   // ---------- Screen router ----------
-  const SCREENS = { launch: 'screenLaunch', players: 'screenPlayers', teams: 'screenTeams', matchSetup: 'screenMatchSetup', lineup: 'screenLineup', match: 'screenMatch', tournament: 'screenTournament' };
+  const SCREENS = { launch: 'screenLaunch', players: 'screenPlayers', teams: 'screenTeams', matchSetup: 'screenMatchSetup', lineup: 'screenLineup', match: 'screenMatch', tournament: 'screenTournament', summary: 'screenSummary' };
   let currentScreen = 'launch';
 
   function showScreen(name) {
