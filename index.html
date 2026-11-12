@@ -2916,6 +2916,14 @@
     $('matchStatus').className = isError ? 'panel-foot error' : 'panel-foot';
   }
 
+  // Players and teams load once. A match must not open before they are in, or the pitch
+  // silently drops every player whose row has not arrived yet.
+  let libraryReady = null;
+  function ensureLibrary() {
+    if (!libraryReady) libraryReady = Promise.all([loadPlayers(), loadTeams()]);
+    return libraryReady;
+  }
+
   async function openMatch(match) {
     liveMatch = match;
     livePlayers = [];
@@ -2924,6 +2932,8 @@
     syncServerTime();
 
     try {
+      await ensureLibrary();
+      if (!playersLoaded) throw new Error('The player library has not loaded. Check the connection and open the match again.');
       // The launch list only carries summary columns; the clock needs the full row.
       const { data: row, error: matchError } = await getClient()
         .from('matches')
@@ -2945,6 +2955,10 @@
     renderMatch();
     startClockTimer();
     showScreen('match');
+  }
+
+  function otherTeamId(teamId) {
+    return teamId === liveMatch.team_a_id ? liveMatch.team_b_id : liveMatch.team_a_id;
   }
 
   function sideOf(teamId) {
@@ -4072,17 +4086,34 @@
       for (const [label, detail] of [['Open play', 'open'], ['Penalty', 'penalty'], ['Free kick', 'freekick'], ['Own goal', 'own']]) {
         seg.append(eventChoice(label, () => {
           f.data.detail = detail;
+          // The GOAL button always belongs to the side the goal counts for. An own goal was put in
+          // by a player of the OTHER side, so the flow switches squads here; the stored team_id
+          // stays the scoring player's team, which is what scoreFor() already expects.
+          if (detail === 'own') f.team = otherTeamId(f.team);
           f.step = 'who';
           renderEventStep();
         }));
       }
       step.append(seg);
     } else if (f.step === 'who') {
-      $('eventTitle').textContent = f.type === 'goal' ? 'Goal — step 2 of 3'
+      const own = f.type === 'goal' && f.data.detail === 'own';
+      const teamName = (teamById(f.team) || {}).name || 'Unknown team';
+      $('eventTitle').textContent = own ? 'Own goal — who put it in?'
+        : f.type === 'goal' ? 'Goal — step 2 of 3'
         : f.type === 'foul' ? 'Foul — who?'
         : 'Card — who?';
-      // Own goal: the player who put it in their own net belongs to f.team; scoreFor credits the other side.
-      step.append(eventPlayerList(onPitchOf(f.team), (p) => {
+      if (own) {
+        const caption = document.createElement('p');
+        caption.style.cssText = 'font-size:12px; color:var(--muted); margin:0 0 8px;';
+        caption.textContent = `${teamName} — the player who put it into his own net`;
+        step.append(caption);
+      }
+      // A card can reach a player serving a sin bin: the second strike that sends him off
+      // has to be recordable. Only a player already sent off is out of reach.
+      const candidates = f.type === 'card'
+        ? sideOf(f.team).filter((r) => !r.sent_off).sort((a, b) => a.player.name.localeCompare(b.player.name))
+        : sideOf(f.team).filter((r) => r.on_pitch).sort((a, b) => a.player.name.localeCompare(b.player.name));
+      const wrap = eventPlayerList(candidates.map((r) => r.player), (p) => {
         f.data.player_id = p.id;
         if (f.type === 'goal' && f.data.detail === 'open') {
           f.step = 'assist';
@@ -4090,7 +4121,16 @@
         } else {
           commitEvent();
         }
-      }));
+      });
+      // Mark anyone who is not currently on the pitch, so a bench player is not carded by mistake.
+      candidates.forEach((r, i) => {
+        if (r.on_pitch || !wrap.children[i]) return;
+        const tag = document.createElement('span');
+        tag.className = 'bench-tag';
+        tag.textContent = binSecsLeft(r) !== null ? 'in the bin' : 'bench';
+        wrap.children[i].append(tag);
+      });
+      step.append(wrap);
     } else if (f.step === 'assist') {
       $('eventTitle').textContent = 'Goal — step 3 of 3';
       $('eventSkip').hidden = false;
@@ -4161,6 +4201,8 @@
       eventFlow.busy = false;
       renderEventStep();
       $('eventMsg').textContent = describeError(err);
+      // The tap must not be lost: offer the same save again instead of making him re-enter it.
+      $('eventStep').append(eventChoice('Retry save', () => commitEvent(), 'primary'));
       console.error('Pitchside event save failed:', err);
     }
   }
@@ -4259,6 +4301,29 @@
     nextPrompt();
   }
 
+  // A deleted card can un-send-off a player. Reads the cards that remain and, if they no
+  // longer add up to two strikes, puts him back on the pitch with any bin cleared.
+  // Known limit: this also clears a running bin that a different card caused.
+  async function undoCardConsequence(playerId, teamId) {
+    const { yellows, reds } = cardTotals(playerId);
+    const strikes = reds + Math.floor(yellows / 2);
+    if (strikes >= 2) return;
+    try {
+      const { error } = await getClient()
+        .from('match_players')
+        .update({ sent_off: false, on_pitch: true, sin_bin_until: null, sin_bin_secs_left: null })
+        .eq('match_id', liveMatch.id)
+        .eq('player_id', playerId)
+        .eq('team_id', teamId);
+      if (error) throw error;
+    } catch (err) {
+      $('logMsg').textContent = describeError(err);
+      console.error('Pitchside card undo failed:', err);
+      return;
+    }
+    await refreshLivePlayers();
+  }
+
   function closeEvent() {
     $('eventOverlay').classList.remove('open');
     eventFlow.busy = false;
@@ -4314,6 +4379,7 @@
       const { error } = await getClient().from('match_events').delete().eq('id', e.id);
       if (error) throw error;
       await loadEvents();
+      if (e.event_type === 'card' && e.player_id) await undoCardConsequence(e.player_id, e.team_id);
       openLog();
     } catch (err) {
       $('logMsg').textContent = describeError(err);
@@ -4561,8 +4627,7 @@
   if (state.role === 'scorer') closeSplash();
   showScreen('launch');
   renderRole();
-  loadPlayers();
-  loadTeams();
+  ensureLibrary();
   loadTournaments();
   loadMatches();
 </script>
