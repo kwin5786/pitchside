@@ -170,6 +170,11 @@
   }
   .m-chip.amber { border-color: var(--amber); color: var(--amber); }
   .m-note { font-size: 12px; color: var(--muted); }
+  /* Tournament screen: LIVE / FIXTURES / RESULTS groups, and the fixture row */
+  .t-group { padding: 20px 0 8px; color: var(--text); }
+  .t-list { display: flex; flex-direction: column; }
+  .t-list .match-card + .match-card { margin-top: 10px; }
+  .m-row.fixture .m-when { width: 72px; }
   .launch-brand { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 6px 0 2px; }
   .brand-logo { max-width: 120px; max-height: 60px; object-fit: contain; }
   .brand-logo[hidden] { display: none; }
@@ -2204,27 +2209,206 @@
     return line;
   }
 
-  // The launch card's own clock. Separate from the match-screen clockTimer: it runs only
-  // while the launch screen is showing and the current match is live.
-  let launchClockTimer = null;
+  // Clocks on the LIVE cards. Separate from the match-screen clockTimer: the interval runs only
+  // while a live match's card is on the screen that started it (launch or tournament).
+  let liveClockTimer = null;
 
-  function stopLaunchClock() {
-    if (launchClockTimer) {
-      clearInterval(launchClockTimer);
-      launchClockTimer = null;
+  function stopLiveClocks() {
+    if (liveClockTimer) {
+      clearInterval(liveClockTimer);
+      liveClockTimer = null;
     }
   }
 
-  function startLaunchClock() {
-    stopLaunchClock();
-    const m = matches.find((d) => d.status !== 'finished' && d.status !== 'abandoned');
-    if (currentScreen !== 'launch' || !m || m.status !== 'live') return;
+  // `list` is the match rows the cards on `screen` were drawn from. Every .js-clock in the
+  // document that names a live row in that list is updated each second.
+  function startLiveClocks(list, screen) {
+    if (currentScreen !== screen) return;   // a render for a screen that is not showing changes nothing
+    stopLiveClocks();
+    const live = (list || []).filter((m) => m.status === 'live');
+    if (!live.length) return;
+    const section = $(SCREENS[screen]);
     const tick = () => {
-      const el = $('launchClock');
-      if (el) el.textContent = formatClock(elapsedSecs(m));
+      let onScreen = false;
+      for (const el of document.querySelectorAll('.js-clock')) {
+        const m = live.find((d) => String(d.id) === el.dataset.matchId);
+        if (!m) continue;
+        el.textContent = formatClock(elapsedSecs(m));
+        if (section.contains(el)) onScreen = true;
+      }
+      return onScreen;
     };
-    tick();
-    launchClockTimer = setInterval(tick, 1000);
+    // No live card on this screen, or the card has since gone: nothing to tick.
+    if (!tick()) return;
+    liveClockTimer = setInterval(() => { if (!tick()) stopLiveClocks(); }, 1000);
+  }
+
+  // The UP NEXT / READY / LIVE NOW card. Tappable by a scorer only.
+  function matchCard(m, score, opts) {
+    const showChips = !opts || opts.chips !== false;
+    const teamA = teamById(m.team_a_id);
+    const teamB = teamById(m.team_b_id);
+    const inPlay = ['live', 'halftime', 'shootout'].includes(m.status);
+
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'match-card';
+    if (state.role === 'scorer') {
+      btn.addEventListener('click', () => {
+        if (m.status === 'setup') openLineup(m);
+        else if (['ready', 'live', 'halftime', 'shootout'].includes(m.status)) openMatch(m);
+      });
+    } else {
+      btn.disabled = true;
+    }
+
+    const head = document.createElement('div');
+    head.className = 'match-card-head';
+    const headText = document.createElement('span');
+    headText.textContent = m.status === 'setup' ? 'UP NEXT'
+      : m.status === 'ready' ? 'READY'
+      : 'LIVE NOW';   // live, halftime, shootout
+    head.append(headText);
+    if (inPlay) {
+      const period = document.createElement('span');
+      period.className = 'match-card-period';
+      period.textContent = matchPeriodLabel(m);
+      const clock = document.createElement('span');
+      clock.className = 'match-card-clock num js-clock';
+      clock.dataset.matchId = m.id;
+      clock.textContent = formatClock(elapsedSecs(m));
+      head.append(period, clock);
+    }
+
+    const shown = inPlay ? score : null;
+    const lines = document.createElement('div');
+    lines.className = 'm-body';
+    lines.append(
+      matchTeamLine(teamA, shown ? shown.a : null, ''),
+      matchTeamLine(teamB, shown ? shown.b : null, '')
+    );
+
+    btn.append(head, lines);
+    if (showChips) btn.append(matchChips(m));
+    return btn;
+  }
+
+  // A finished or abandoned match. opts: { chips, del }. Tapping opens the summary for
+  // scorer and viewer alike.
+  function resultRow(m, score, opts) {
+    const teamA = teamById(m.team_a_id);
+    const teamB = teamById(m.team_b_id);
+
+    const row = document.createElement('div');
+    row.className = 'm-row';
+
+    const when = document.createElement('div');
+    when.className = 'm-when';
+    const time = document.createElement('span');
+    time.textContent = matchTimeLabel(m);
+    const tag = document.createElement('span');
+    tag.className = 'm-tag';
+    tag.textContent = matchResultTag(m, score);
+    when.append(time, tag);
+
+    // Winner by goals, or by the shootout when the goals are level. A draw or an
+    // abandoned match dims neither line.
+    let winner = '';
+    if (score && m.status !== 'abandoned') {
+      if (score.a !== score.b) winner = score.a > score.b ? 'a' : 'b';
+      else if (score.pens && score.pa !== score.pb) winner = score.pa > score.pb ? 'a' : 'b';
+    }
+
+    const body = document.createElement('div');
+    body.className = 'm-body';
+    body.append(
+      matchTeamLine(teamA, score ? score.a : null, winner ? (winner === 'a' ? 'won' : 'lost') : ''),
+      matchTeamLine(teamB, score ? score.b : null, winner ? (winner === 'b' ? 'won' : 'lost') : '')
+    );
+    if (opts && opts.chips) body.append(matchChips(m));
+
+    const noteText = m.status === 'abandoned' ? 'Abandoned'
+      : score && score.pens ? `Penalties ${score.pa} – ${score.pb}`
+      : m.extra_secs > 0 ? 'After extra time'
+      : '';
+    if (noteText) {
+      const note = document.createElement('div');
+      note.className = 'm-note';
+      note.textContent = noteText;
+      body.append(note);
+    }
+
+    row.append(when, body);
+    row.classList.add('tappable');
+    row.setAttribute('role', 'button');
+    row.tabIndex = 0;
+    row.addEventListener('click', () => openSummary(m));
+    row.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && e.target === row) openSummary(m);
+    });
+    if (opts && opts.del) {
+      const del = document.createElement('button');
+      del.type = 'button';
+      del.className = 'log-del';
+      del.textContent = 'Delete';
+      del.addEventListener('click', (e) => { e.stopPropagation(); confirmDeleteMatch(m); });
+      row.append(del);
+    }
+    return row;
+  }
+
+  // Result rows under date headings, appended to `list`. Shared by the launch and tournament screens.
+  function appendResultRows(list, rows, scores, opts) {
+    let dateKey = null;
+    for (const m of rows) {
+      if (matchDateKey(m) !== dateKey) {
+        dateKey = matchDateKey(m);
+        const heading = document.createElement('div');
+        heading.className = 'section-label m-date';
+        heading.textContent = matchDateLabel(m);
+        list.append(heading);
+      }
+      list.append(resultRow(m, scores[m.id], opts));
+    }
+  }
+
+  // A fixture still to be played. A scorer taps through to the line-up or the match; a viewer only reads it.
+  function fixtureRow(m) {
+    const row = document.createElement('div');
+    row.className = 'm-row fixture';
+
+    const when = document.createElement('div');
+    when.className = 'm-when';
+    // Only a real kick-off time is shown. created_at is when the fixture was set up, not when it is played.
+    if (m.kicked_off_at) {
+      const time = document.createElement('span');
+      time.textContent = matchTimeLabel(m);
+      when.append(time);
+    }
+    const tag = document.createElement('span');
+    tag.className = 'm-tag';
+    tag.textContent = m.status === 'ready' ? 'Ready' : 'Not started';
+    when.append(tag);
+
+    const body = document.createElement('div');
+    body.className = 'm-body';
+    body.append(
+      matchTeamLine(teamById(m.team_a_id), null, ''),
+      matchTeamLine(teamById(m.team_b_id), null, '')
+    );
+
+    row.append(when, body);
+    if (state.role === 'scorer') {
+      const open = () => (m.status === 'setup' ? openLineup(m) : openMatch(m));
+      row.classList.add('tappable');
+      row.setAttribute('role', 'button');
+      row.tabIndex = 0;
+      row.addEventListener('click', open);
+      row.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && e.target === row) open();
+      });
+    }
+    return row;
   }
 
   function renderMatches() {
@@ -2236,53 +2420,7 @@
 
     const card = $('currentMatch');
     card.replaceChildren();
-    if (currentMatch) {
-      const m = currentMatch;
-      const teamA = teamById(m.team_a_id);
-      const teamB = teamById(m.team_b_id);
-      const inPlay = ['live', 'halftime', 'shootout'].includes(m.status);
-
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.className = 'match-card';
-      if (state.role === 'scorer') {
-        btn.addEventListener('click', () => {
-          if (m.status === 'setup') openLineup(m);
-          else if (['ready', 'live', 'halftime', 'shootout'].includes(m.status)) openMatch(m);
-        });
-      } else {
-        btn.disabled = true;
-      }
-
-      const head = document.createElement('div');
-      head.className = 'match-card-head';
-      const headText = document.createElement('span');
-      headText.textContent = m.status === 'setup' ? 'UP NEXT'
-        : m.status === 'ready' ? 'READY'
-        : 'LIVE NOW';   // live, halftime, shootout
-      head.append(headText);
-      if (inPlay) {
-        const period = document.createElement('span');
-        period.className = 'match-card-period';
-        period.textContent = matchPeriodLabel(m);
-        const clock = document.createElement('span');
-        clock.className = 'match-card-clock num';
-        clock.id = 'launchClock';
-        clock.textContent = formatClock(elapsedSecs(m));
-        head.append(period, clock);
-      }
-
-      const score = inPlay ? matchScores[m.id] : null;
-      const lines = document.createElement('div');
-      lines.className = 'm-body';
-      lines.append(
-        matchTeamLine(teamA, score ? score.a : null, ''),
-        matchTeamLine(teamB, score ? score.b : null, '')
-      );
-
-      btn.append(head, lines, matchChips(m));
-      card.append(btn);
-    }
+    if (currentMatch) card.append(matchCard(currentMatch, matchScores[currentMatch.id]));
 
     const list = $('recentResults');
     list.replaceChildren();
@@ -2294,80 +2432,9 @@
       list.append(empty);
     }
 
-    let dateKey = null;
-    for (const m of finished) {
-      const teamA = teamById(m.team_a_id);
-      const teamB = teamById(m.team_b_id);
-      const score = matchScores[m.id];
+    appendResultRows(list, finished, matchScores, { chips: true, del: state.role === 'scorer' });
 
-      if (matchDateKey(m) !== dateKey) {
-        dateKey = matchDateKey(m);
-        const heading = document.createElement('div');
-        heading.className = 'section-label m-date';
-        heading.textContent = matchDateLabel(m);
-        list.append(heading);
-      }
-
-      const row = document.createElement('div');
-      row.className = 'm-row';
-
-      const when = document.createElement('div');
-      when.className = 'm-when';
-      const time = document.createElement('span');
-      time.textContent = matchTimeLabel(m);
-      const tag = document.createElement('span');
-      tag.className = 'm-tag';
-      tag.textContent = matchResultTag(m, score);
-      when.append(time, tag);
-
-      // Winner by goals, or by the shootout when the goals are level. A draw or an
-      // abandoned match dims neither line.
-      let winner = '';
-      if (score && m.status !== 'abandoned') {
-        if (score.a !== score.b) winner = score.a > score.b ? 'a' : 'b';
-        else if (score.pens && score.pa !== score.pb) winner = score.pa > score.pb ? 'a' : 'b';
-      }
-
-      const body = document.createElement('div');
-      body.className = 'm-body';
-      body.append(
-        matchTeamLine(teamA, score ? score.a : null, winner ? (winner === 'a' ? 'won' : 'lost') : ''),
-        matchTeamLine(teamB, score ? score.b : null, winner ? (winner === 'b' ? 'won' : 'lost') : ''),
-        matchChips(m)
-      );
-
-      const noteText = m.status === 'abandoned' ? 'Abandoned'
-        : score && score.pens ? `Penalties ${score.pa} – ${score.pb}`
-        : m.extra_secs > 0 ? 'After extra time'
-        : '';
-      if (noteText) {
-        const note = document.createElement('div');
-        note.className = 'm-note';
-        note.textContent = noteText;
-        body.append(note);
-      }
-
-      row.append(when, body);
-      // Scorer and viewer alike can read a summary; only the scorer gets Delete.
-      row.classList.add('tappable');
-      row.setAttribute('role', 'button');
-      row.tabIndex = 0;
-      row.addEventListener('click', () => openSummary(m));
-      row.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter' && e.target === row) openSummary(m);
-      });
-      if (state.role === 'scorer') {
-        const del = document.createElement('button');
-        del.type = 'button';
-        del.className = 'log-del';
-        del.textContent = 'Delete';
-        del.addEventListener('click', (e) => { e.stopPropagation(); confirmDeleteMatch(m); });
-        row.append(del);
-      }
-      list.append(row);
-    }
-
-    startLaunchClock();
+    startLiveClocks(matches, 'launch');
   }
 
   function confirmDeleteMatch(m) {
@@ -2422,7 +2489,7 @@
 
   // ---------- Tournaments ----------
   let tournaments = [];
-  // selected null = list state; otherwise the open tournament with its finished matches and table.
+  // selected null = list state; otherwise the open tournament with all its matches and the table.
   const tournamentView = { selected: null, rows: [], matches: [], scores: {}, busy: false };
 
   async function loadTournaments() {
@@ -2465,16 +2532,17 @@
     try {
       const { data, error } = await getClient()
         .from('matches')
-        .select('id, status, team_a_id, team_b_id, created_at')
+        .select('id, status, match_type, team_a_id, team_b_id, created_at, kicked_off_at, extra_secs, current_half, half_started_at, paused_secs, is_running, first_half_secs, second_half_secs')
         .eq('tournament_id', t.id)
-        .eq('status', 'finished')
         .order('created_at', { ascending: false });
       if (error) throw error;
-      const scores = await buildScores(data || []);
+      const scores = await buildScores((data || []).filter((m) => !['setup', 'ready'].includes(m.status)));
       if (v.selected !== t) return;   // the scorer moved on while this was loading
       v.matches = data || [];
       v.scores = scores;
-      v.rows = computeStandings(v.matches, v.scores);
+      // The table counts FINISHED matches only. v.matches now holds fixtures and live matches
+      // too; passing those in would count them as played.
+      v.rows = computeStandings(v.matches.filter((d) => d.status === 'finished'), v.scores);
     } catch (err) {
       if (v.selected !== t) return;
       setTournamentStatus(describeError(err), true);
@@ -2587,7 +2655,7 @@
     } else if (!v.matches.length) {
       const empty = document.createElement('div');
       empty.className = 'empty';
-      empty.textContent = 'No finished matches yet';
+      empty.textContent = 'No matches yet';
       body.append(empty);
     } else {
       const wrap = document.createElement('div');
@@ -2630,42 +2698,29 @@
 
       table.append(thead, tbody);
       wrap.append(table);
-      body.append(wrap);
+      // No finished match yet means no rows: leave the bare table header out.
+      if (v.rows.length) body.append(wrap);
 
-      const label = document.createElement('div');
-      label.className = 'field-label';
-      label.textContent = 'Matches';
-      body.append(label);
-
-      // Same wording as the finished rows on the launch screen, but read-only.
-      const list = document.createElement('div');
-      list.className = 'player-list';
-      for (const m of v.matches) {
-        const teamA = teamById(m.team_a_id);
-        const teamB = teamById(m.team_b_id);
-        const score = v.scores[m.id];
-
-        const row = document.createElement('div');
-        row.className = 'player-row';
-
-        const dot = document.createElement('span');
-        dot.className = 'colour-dot';
-        if (teamA) dot.style.background = teamA.colour;
-
-        const name = document.createElement('span');
-        name.className = 'player-name';
-        name.textContent = score
-          ? `${teamA ? teamA.name : 'Unknown team'} ${score.a} – ${score.b} ${teamB ? teamB.name : 'Unknown team'}`
-          : `${teamA ? teamA.name : 'Unknown team'} v ${teamB ? teamB.name : 'Unknown team'}`;
-
-        const status = document.createElement('span');
-        status.style.cssText = 'margin-left:auto; color:var(--muted); font-size:13px; white-space:nowrap;';
-        status.textContent = score && score.pens ? `Pens ${score.pa} – ${score.pb}` : 'Full time';
-
-        row.append(dot, name, status);
-        list.append(row);
-      }
-      body.append(list);
+      // Every match in the tournament, grouped by state. An empty group is left out.
+      const group = (label, rows, fill) => {
+        if (!rows.length) return;
+        const heading = document.createElement('div');
+        heading.className = 'section-label t-group';
+        heading.textContent = label;
+        const list = document.createElement('div');
+        list.className = 't-list';
+        fill(list, rows);
+        body.append(heading, list);
+      };
+      group('LIVE', v.matches.filter((m) => ['live', 'halftime', 'shootout'].includes(m.status)), (list, rows) => {
+        for (const m of rows) list.append(matchCard(m, v.scores[m.id], { chips: false }));
+      });
+      group('FIXTURES', v.matches.filter((m) => m.status === 'setup' || m.status === 'ready'), (list, rows) => {
+        for (const m of rows) list.append(fixtureRow(m));
+      });
+      group('RESULTS', v.matches.filter((m) => m.status === 'finished' || m.status === 'abandoned'), (list, rows) => {
+        appendResultRows(list, rows, v.scores, { chips: false, del: false });
+      });
     }
 
     if (isScorer) {
@@ -2678,6 +2733,8 @@
       del.addEventListener('click', () => confirmDeleteTournament(v.selected));
       body.append(del);
     }
+
+    startLiveClocks(v.matches, 'tournament');
   }
 
   // ---------- New / delete tournament ----------
@@ -5359,10 +5416,12 @@
       stopClockTimer();
       stopSound();
     }
-    if (name !== 'launch') stopLaunchClock();
+    if (name !== 'launch' && name !== 'tournament') stopLiveClocks();
     currentScreen = name;
-    // Coming back to the launch screen does not re-render the card, so the card clock restarts here.
-    if (name === 'launch') startLaunchClock();
+    // Showing a screen does not re-render its cards, so the card clocks restart here. Starting
+    // for one screen stops the other's.
+    if (name === 'launch') startLiveClocks(matches, 'launch');
+    if (name === 'tournament') startLiveClocks(tournamentView.matches, 'tournament');
     document.body.dataset.screen = name;
     for (const key of Object.keys(SCREENS)) {
       $(SCREENS[key]).hidden = key !== name;
