@@ -3516,7 +3516,9 @@
     if (state.role !== 'scorer' || !liveMatch || liveMatch.status !== 'live') return;
     subFlow = { out: row, busy: false, mode: 'sub' };
     $('subMsg').textContent = '';
-    $('subKeeper').hidden = !row.is_keeper;
+    // Offered on every player except the current keeper, like Make captain: one tap hands him the gloves.
+    $('subKeeper').hidden = !!row.is_keeper;
+    $('subKeeper').textContent = 'Make keeper';
     $('subCaptain').hidden = !!row.is_captain;
     $('subCancel').textContent = 'Cancel';
     renderSubList();
@@ -3531,6 +3533,45 @@
     $('subCancel').textContent = 'Skip';
     renderSubList();
     $('subOverlay').classList.add('open');
+  }
+
+  // Asked straight after a card takes the keeper off the pitch.
+  function openGloves(teamId) {
+    subFlow = { out: null, busy: false, mode: 'gloves', teamId };
+    $('subMsg').textContent = '';
+    $('subKeeper').hidden = true;
+    $('subCaptain').hidden = true;
+    $('subCancel').textContent = 'Skip';
+    renderSubList();
+    $('subOverlay').classList.add('open');
+  }
+
+  // Prompts waiting to be asked one after another (gloves, then armband).
+  let promptQueue = [];
+  function nextPrompt() {
+    const next = promptQueue.shift();
+    if (!next) return;
+    if (next.kind === 'gloves') openGloves(next.teamId);
+    else openArmband(next.teamId);
+  }
+
+  async function setKeeper(row) {
+    if (subFlow.busy) return;
+    subFlow.busy = true;
+    try {
+      const { error } = await getClient().from('match_players')
+        .update({ is_keeper: false })
+        .eq('match_id', liveMatch.id).eq('team_id', row.team_id);
+      if (error) throw error;
+      await updateMatchPlayer(row.player_id, { is_keeper: true });
+      closeSub();
+      await refreshLivePlayers();
+    } catch (err) {
+      subFlow.busy = false;
+      $('subMsg').textContent = describeError(err);
+      console.error('Pitchside keeper change failed:', err);
+      await refreshLivePlayers();
+    }
   }
 
   async function setCaptain(row) {
@@ -3555,11 +3596,13 @@
   function closeSub() {
     $('subOverlay').classList.remove('open');
     subFlow.busy = false;
+    nextPrompt();
   }
 
   function renderSubList() {
-    if (subFlow.mode === 'armband') {
-      $('subTitle').textContent = 'Who takes the armband?';
+    if (subFlow.mode === 'armband' || subFlow.mode === 'gloves') {
+      const gloves = subFlow.mode === 'gloves';
+      $('subTitle').textContent = gloves ? 'Who goes in goal?' : 'Who takes the armband?';
       const onPitchNow = sideOf(subFlow.teamId).filter((r) => r.on_pitch);
       const armbandList = $('subList');
       armbandList.replaceChildren();
@@ -3584,7 +3627,7 @@
           tag.textContent = 'F';
           row.append(tag);
         }
-        row.addEventListener('click', () => setCaptain(r));
+        row.addEventListener('click', () => (gloves ? setKeeper(r) : setCaptain(r)));
         armbandList.append(row);
       }
       if (!onPitchNow.length) {
@@ -3658,7 +3701,8 @@
     renderSubList();
     try {
       await updateMatchPlayer(out.player_id, { on_pitch: false, is_keeper: false, is_captain: false });
-      await updateMatchPlayer(inRow.player_id, { on_pitch: true, is_keeper: !!out.is_keeper });
+      // The player coming on never takes the gloves automatically; the scorer is asked below.
+      await updateMatchPlayer(inRow.player_id, { on_pitch: true, is_keeper: false });
       const { error } = await getClient().from('match_events').insert({
         match_id: liveMatch.id,
         team_id: out.team_id,
@@ -3671,9 +3715,12 @@
       if (error) throw error;
       await refreshLivePlayers();
       await loadEvents();
-      // openArmband replaces subFlow and keeps the overlay open, so closeSub is skipped on that path.
-      if (out.is_captain) openArmband(out.team_id);
-      else closeSub();
+      // A keeper or captain going off is asked about straight away: gloves first, then the armband.
+      // closeSub opens the first waiting prompt, if there is one.
+      promptQueue = [];
+      if (out.is_keeper) promptQueue.push({ kind: 'gloves', teamId: out.team_id });
+      if (out.is_captain) promptQueue.push({ kind: 'armband', teamId: out.team_id });
+      closeSub();
       showFx('sub', { who: `${inRow.player.name} on for ${out.player.name}` });
     } catch (err) {
       subFlow.busy = false;
@@ -3764,6 +3811,11 @@
   $('subOverlay').addEventListener('click', (e) => { if (e.target === e.currentTarget) closeSub(); });
   $('subCaptain').addEventListener('click', () => setCaptain(subFlow.out));
   $('subKeeper').addEventListener('click', () => {
+    // The button is only shown on a player who is not the keeper: give him the gloves.
+    if (!subFlow.out.is_keeper) {
+      setKeeper(subFlow.out);
+      return;
+    }
     subFlow.mode = 'keeper';
     $('subKeeper').hidden = true;
     renderSubList();
@@ -4029,7 +4081,7 @@
       step.append(seg);
     } else if (f.step === 'confirmSave') {
       $('eventTitle').textContent = 'Save';
-      const keeperRow = livePlayers.find((r) => r.team_id === f.team && r.is_keeper);
+      const keeperRow = livePlayers.find((r) => r.team_id === f.team && r.is_keeper && r.on_pitch);
       if (keeperRow) {
         const p = document.createElement('p');
         p.textContent = keeperRow.player.name;
@@ -4069,7 +4121,7 @@
       if (type !== 'card') eventFx(type, detail, team, playerId);
       await loadEvents();
       if (type === 'card') {
-        await applyCardConsequence(playerId, team);
+        await applyCardConsequence(playerId, team, detail);
         eventFx(type, detail, team, playerId);
       }
     } catch (err) {
@@ -4088,18 +4140,23 @@
     };
   }
 
-  // House rules, read after the new card is saved and liveEvents reloaded:
-  // 1 yellow → nothing; 2 yellows or 1 red → 60 s sin bin; 3+ yellows or 2+ reds → sent off.
-  async function applyCardConsequence(playerId, teamId) {
+  // House rules, read after the new card is saved and liveEvents reloaded.
+  // A strike is a red card or a pair of yellows. First strike → 60 s sin bin; second strike → sent off.
+  // So: Y warning, YY bin, YYY warning, YYYY off; R bin, RR off; YY + R off, in any order.
+  async function applyCardConsequence(playerId, teamId, detail) {
     if (!playerId) return;
     const { yellows, reds } = cardTotals(playerId);
     const wasCaptain = livePlayers.some((r) => r.player_id === playerId && r.is_captain);
+    const wasKeeper = livePlayers.some((r) => r.player_id === playerId && r.is_keeper);
+    // Every red is a strike and every second yellow is a strike. An odd yellow is a warning only.
+    if (detail !== 'red' && yellows % 2 !== 0) return;
+    const strikes = reds + Math.floor(yellows / 2);
     let fields = null;
     let sentOff = false;
-    if (yellows >= 3 || reds >= 2) {
+    if (strikes >= 2) {
       sentOff = true;
-      fields = { sent_off: true, on_pitch: false, sin_bin_until: null, sin_bin_secs_left: null, is_captain: false };
-    } else if (yellows === 2 || reds === 1) {
+      fields = { sent_off: true, on_pitch: false, sin_bin_until: null, sin_bin_secs_left: null, is_captain: false, is_keeper: false };
+    } else if (strikes === 1) {
       fields = { sin_bin_until: new Date(nowMs() + 60 * 1000).toISOString(), sin_bin_secs_left: null, on_pitch: false };
     }
     if (!fields) return;
@@ -4117,8 +4174,12 @@
       console.error('Pitchside card consequence failed:', err);
     }
     await refreshLivePlayers();
-    // A sin bin leaves the armband alone; only a send-off hands it on.
-    if (sentOff && wasCaptain) openArmband(teamId);
+    // A keeper who leaves the pitch needs a stand-in at once. A sin bin leaves the armband alone;
+    // only a send-off hands it on.
+    promptQueue = [];
+    if (wasKeeper) promptQueue.push({ kind: 'gloves', teamId });
+    if (sentOff && wasCaptain) promptQueue.push({ kind: 'armband', teamId });
+    nextPrompt();
   }
 
   function closeEvent() {
@@ -4264,7 +4325,7 @@
     own: { ico: '🤦', title: 'OWN GOAL', anim: 'wob', lines: ['Wrong net, boss', 'Scoring for both teams today', 'A gift, nicely wrapped'] },
     save: { ico: '🧤', title: 'SAVE!', anim: 'pop', lines: ['Not today', 'Hands of glue', 'Access denied'] },
     foul: { ico: '📣', title: 'FOUL!', anim: 'shk', lines: ['Oi, referee', 'That tackle was from 1998', 'Football, not kabaddi'] },
-    yellow: { ico: '🟨', title: 'YELLOW CARD', anim: 'flip', bg: '#E0A800', lines: ['Booked. Behave', 'Name taken, noted', 'First warning'] },
+    yellow: { ico: '🟨', title: 'YELLOW CARD', anim: 'flip', bg: '#E0A800', lines: ['Booked. Behave', 'Name taken, noted', 'Careful now'] },
     yellowBin: { ico: '🟨⏱️', title: 'YELLOW CARD', anim: 'flip', bg: '#E0A800', lines: ['Naughty step, 1 minute', 'Go think about what you did', 'Short tea break'] },
     yellowOff: { ico: '🟨👋', title: 'YELLOW CARD', anim: 'slam', bg: '#E0A800', shake: true, lines: ['Early shower', 'Meeting ended for you', 'Logged out'] },
     red: { ico: '🟥', title: 'RED CARD', anim: 'slam', bg: '#DC2626', ink: '#fff', shake: true, lines: ['Naughty step, 1 minute', 'Go think about what you did', 'Short tea break'] },
