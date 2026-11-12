@@ -693,30 +693,63 @@
     .standings:not(.stats-table) th:nth-child(8), .standings:not(.stats-table) td:nth-child(8),
     .standings:not(.stats-table) th:nth-child(9), .standings:not(.stats-table) td:nth-child(9) { display: none; }
   }
-  /* ---------- Tournament statistics (item 31) ---------- */
-  .lb-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0 24px; }
-  .lb { min-width: 0; }
-  .lb .colour-dot, .disc-row .colour-dot { width: 14px; height: 14px; }
-  .lb .player-row, .disc-row { gap: 8px; }
-  .lb .player-name, .disc-row .player-name { flex: 1; }
-  .lb-pos { flex: none; width: 16px; color: var(--muted); }
-  .lb-per { flex: none; font-size: 12px; color: var(--muted); }
-  .lb-count { flex: none; min-width: 24px; text-align: right; font-size: 18px; font-weight: 700; }
-  @media (max-width: 700px) {
-    .lb-grid { grid-template-columns: minmax(0, 1fr); }
+  /* ---------- Tournament screen cards (items 31 and 32) ---------- */
+  .t-card {
+    margin-bottom: 12px; overflow: hidden;
+    background: var(--btn);   /* one step lighter than --panel */
+    border: 0.5px solid var(--border); border-radius: 12px;
   }
-  /* The player table's heading is a plain button that opens and closes the table. */
+  .t-card-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 12px 14px; }
+  .t-card-title { font-size: 15px; font-weight: 500; }
+  .t-card-sub { font-size: 12px; color: var(--muted); white-space: nowrap; }
+  .t-card .empty { padding: 14px; }
+  .t-band { padding: 6px 14px; background: rgba(255, 255, 255, 0.05); font-size: 12px; color: var(--muted); }
+  .t-card .t-list { padding: 0 14px; }
+  .t-card .t-list.live { padding: 12px 14px; }
+  /* Results: two columns with a divider on a wide screen, one column on a phone. */
+  .t-results { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .t-results .m-row { padding: 12px 14px; border-top: 0; }
+  .t-results .m-row:nth-child(odd) { border-right: 0.5px solid var(--border); }
+  .t-results .m-row:nth-child(n+3) { border-top: 0.5px solid var(--border); }
+  .m-meta { font-size: 11px; color: var(--muted); }
+  .m-arrow { flex: none; font-size: 9px; line-height: 1; }
+  .m-arrow.off { visibility: hidden; }
+  @media (max-width: 700px) {
+    .t-results { grid-template-columns: minmax(0, 1fr); }
+    .t-results .m-row:nth-child(odd) { border-right: 0; }
+    .t-results .m-row:nth-child(n+2) { border-top: 0.5px solid var(--border); }
+  }
+  /* Tables inside a card: the team / player cell stays put while the rest scrolls. */
+  .t-card .standings-wrap { max-width: none; margin: 0; padding: 0 14px 6px; }
+  .t-card .standings .team { position: sticky; left: 0; z-index: 1; background: var(--btn); }
+  .t-card .standings:not(.stats-table) .team { min-width: 110px; }
+  /* Stat leaders: tab row, then the top five. */
+  .t-tabs { display: flex; overflow-x: auto; padding: 0 6px; border-bottom: 0.5px solid var(--border); scrollbar-width: none; }
+  .t-tabs::-webkit-scrollbar { display: none; }
+  button.t-tab {
+    flex: none; min-height: var(--touch); padding: 0 10px;
+    background: none; border: 0; border-bottom: 2px solid transparent; border-radius: 0;
+    font-size: 13px; font-weight: 400; color: var(--muted); white-space: nowrap;
+  }
+  button.t-tab[aria-selected="true"] { border-bottom-color: var(--green); font-weight: 500; color: #fff; }
+  .ldr-row { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 8px 14px; }
+  .ldr-row + .ldr-row { border-top: 0.5px solid var(--border); }
+  .ldr-pos { flex: none; width: 16px; color: var(--muted); }
+  .ldr-who { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+  .ldr-team { font-size: 11px; color: var(--muted); }
+  .ldr-per { flex: none; font-size: 12px; color: var(--muted); }
+  .ldr-count { flex: none; min-width: 24px; text-align: right; font-size: 18px; font-weight: 700; }
+  /* The player table's row: label on the left, plus / minus on the right. */
   button.stat-toggle {
     display: flex; align-items: center; justify-content: space-between;
-    width: 100%; min-height: var(--touch); margin-top: 12px; padding: 0;
-    background: none; border: 0; border-radius: 0; color: var(--text); text-align: left;
+    width: 100%; min-height: var(--touch); padding: 0 14px;
+    background: none; border: 0; border-top: 0.5px solid var(--border); border-radius: 0;
+    font-size: 13px; font-weight: 400; color: var(--text); text-align: left;
   }
-  button.stat-toggle::after { content: '+'; font-size: 18px; font-weight: 400; letter-spacing: 0; color: var(--muted); }
+  button.stat-toggle::after { content: '+'; font-size: 18px; color: var(--muted); }
   button.stat-toggle[aria-expanded="true"]::after { content: '\2013'; }
   /* The name column keeps a readable width; the table scrolls inside its wrapper instead. */
   .standings.stats-table .team { width: auto; min-width: 120px; max-width: 160px; }
-  .disc-row .mk-card { flex: none; }
-  .disc-fouls { flex: none; min-width: 56px; text-align: right; color: var(--muted); }
 
   /* ---------- Picked rows (line-up and team squad): high contrast for outdoor use ---------- */
   button.squad-row { padding-left: 10px; padding-right: 10px; }
@@ -2438,6 +2471,9 @@
 
     const row = document.createElement('div');
     row.className = 'm-row';
+    // compact: the tournament card's cell, with the tag and time under the team lines.
+    const compact = !!(opts && opts.compact);
+    if (compact) row.classList.add('compact');
 
     const when = document.createElement('div');
     when.className = 'm-when';
@@ -2458,11 +2494,26 @@
 
     const body = document.createElement('div');
     body.className = 'm-body';
-    body.append(
-      matchTeamLine(teamA, score ? score.a : null, winner ? (winner === 'a' ? 'won' : 'lost') : ''),
-      matchTeamLine(teamB, score ? score.b : null, winner ? (winner === 'b' ? 'won' : 'lost') : '')
-    );
+    const lineA = matchTeamLine(teamA, score ? score.a : null, winner ? (winner === 'a' ? 'won' : 'lost') : '');
+    const lineB = matchTeamLine(teamB, score ? score.b : null, winner ? (winner === 'b' ? 'won' : 'lost') : '');
+    body.append(lineA, lineB);
+    if (compact && winner) {
+      // An arrow after the winner's score. The loser's line carries a hidden one so the scores stay aligned.
+      for (const [line, side] of [[lineA, 'a'], [lineB, 'b']]) {
+        const arrow = document.createElement('span');
+        arrow.className = side === winner ? 'm-arrow' : 'm-arrow off';
+        arrow.textContent = '\u25C0';
+        arrow.setAttribute('aria-hidden', 'true');
+        line.append(arrow);
+      }
+    }
     if (opts && opts.chips) body.append(matchChips(m));
+    if (compact) {
+      const meta = document.createElement('div');
+      meta.className = 'm-meta';
+      meta.textContent = `${matchResultTag(m, score)} \u00B7 ${matchTimeLabel(m)}`;
+      body.append(meta);
+    }
 
     const noteText = m.status === 'abandoned' ? 'Abandoned'
       : score && score.pens ? `Penalties ${score.pa} – ${score.pb}`
@@ -2475,7 +2526,8 @@
       body.append(note);
     }
 
-    row.append(when, body);
+    if (compact) row.append(body);
+    else row.append(when, body);
     row.classList.add('tappable');
     row.setAttribute('role', 'button');
     row.tabIndex = 0;
@@ -2633,7 +2685,7 @@
   // selected null = list state; otherwise the open tournament with all its matches and the table.
   // standings = the points table; events / rows = match_events and match_players of the FINISHED
   // matches; stats = computeTournamentStats() of those, or null when they have not loaded.
-  const tournamentView = { selected: null, standings: [], matches: [], scores: {}, events: [], rows: [], stats: null, tableOpen: false, busy: false };
+  const tournamentView = { selected: null, standings: [], matches: [], scores: {}, events: [], rows: [], stats: null, tableOpen: false, leaderTab: 'goals', busy: false };
 
   async function loadTournaments() {
     try {
@@ -2665,6 +2717,8 @@
 
   async function openTournament(t) {
     const v = tournamentView;
+    // The stat-leaders tab is kept across a reload of the same tournament only.
+    if (!v.selected || v.selected.id !== t.id) v.leaderTab = 'goals';
     v.selected = t;
     v.standings = [];
     v.matches = [];
@@ -2849,7 +2903,42 @@
     return { players: list, teams: byTeam };
   }
 
-  // The statistics block under the match groups. Drawn only when a finished match has loaded stats.
+  // One card of the open-tournament screen. The caller fills `body`.
+  function statCard(title, subtitle) {
+    const card = document.createElement('div');
+    card.className = 't-card';
+    const head = document.createElement('div');
+    head.className = 't-card-head';
+    const name = document.createElement('span');
+    name.className = 't-card-title';
+    name.textContent = title;
+    head.append(name);
+    if (subtitle) {
+      const sub = document.createElement('span');
+      sub.className = 't-card-sub';
+      sub.textContent = subtitle;
+      head.append(sub);
+    }
+    const body = document.createElement('div');
+    body.className = 't-card-body';
+    card.append(head, body);
+    return { card, body };
+  }
+
+  // A tinted strip across the full card width, heading a group of matches.
+  function cardBand(text) {
+    const band = document.createElement('div');
+    band.className = 't-band';
+    band.textContent = text;
+    return band;
+  }
+
+  const LEADER_TABS = [
+    ['goals', 'Goals'], ['assists', 'Assists'], ['saves', 'Saves'],
+    ['fouls', 'Fouls'], ['yellows', 'Yellow cards'], ['reds', 'Red cards']
+  ];
+
+  // The body of the 'Stat leaders' card: a tabbed top five, then the full player table.
   function appendTournamentStats(body, v) {
     const stats = v.stats;
     const dotFor = (teamId) => {
@@ -2859,61 +2948,84 @@
       if (team) dot.style.background = team.colour;
       return dot;
     };
-    const label = (text) => {
-      const el = document.createElement('div');
-      el.className = 'section-label t-group';
-      el.textContent = text;
-      return el;
-    };
-    const noneYet = () => {
-      const el = document.createElement('div');
-      el.className = 'empty';
-      el.textContent = 'None yet';
-      return el;
-    };
     const byName = (x, y) => x.name.localeCompare(y.name);
 
-    // a) Leaderboards: top five, ties share a position.
-    const grid = document.createElement('div');
-    grid.className = 'lb-grid';
-    for (const [title, key] of [['TOP SCORERS', 'goals'], ['MOST ASSISTS', 'assists'], ['MOST SAVES', 'saves']]) {
-      const board = document.createElement('div');
-      board.className = 'lb';
-      board.append(label(title));
+    // Top five on the chosen stat; ties share a position.
+    const tabs = document.createElement('div');
+    tabs.className = 't-tabs';
+    tabs.setAttribute('role', 'tablist');
+    const list = document.createElement('div');
+    list.className = 'ldr-list';
+    const drawList = () => {
+      const key = v.leaderTab;
+      list.replaceChildren();
       const ranked = stats.players.filter((st) => st[key] > 0).sort((x, y) => y[key] - x[key] || byName(x, y));
-      if (!ranked.length) board.append(noneYet());
+      if (!ranked.length) {
+        const none = document.createElement('div');
+        none.className = 'empty';
+        none.textContent = 'None yet';
+        list.append(none);
+      }
       for (const st of ranked.slice(0, 5)) {
+        const team = teamById(st.teamId);
+        const swatch = team ? TEAM_COLOURS.find((c) => c.hex === team.colour) : null;
         const row = document.createElement('div');
-        row.className = 'player-row';
+        row.className = 'ldr-row';
         const pos = document.createElement('span');
-        pos.className = 'lb-pos num';
+        pos.className = 'ldr-pos num';
         pos.textContent = String(1 + ranked.filter((o) => o[key] > st[key]).length);
+        const badge = document.createElement('span');
+        badge.className = 'initials';
+        badge.textContent = initials(st.name);
+        if (team) badge.style.background = team.colour;
+        badge.style.color = swatch ? swatch.ink : '#fff';
+        const who = document.createElement('div');
+        who.className = 'ldr-who';
         const name = document.createElement('span');
         name.className = 'player-name';
         name.textContent = st.name;
-        const count = document.createElement('span');
-        count.className = 'lb-count num';
-        count.textContent = String(st[key]);
-        row.append(pos, dotFor(st.teamId), name);
+        const teamName = document.createElement('span');
+        teamName.className = 'player-name ldr-team';
+        teamName.textContent = team ? team.name : 'Unknown team';
+        who.append(name, teamName);
+        row.append(pos, badge, who);
         if (key === 'goals') {
           const per = document.createElement('span');
-          per.className = 'lb-per num';
+          per.className = 'ldr-per num';
           per.textContent = `${st.goalsPerMatch} a match`;
           row.append(per);
         }
+        const count = document.createElement('span');
+        count.className = 'ldr-count num';
+        count.textContent = String(st[key]);
         row.append(count);
-        board.append(row);
+        list.append(row);
       }
-      grid.append(board);
+    };
+    for (const [key, text] of LEADER_TABS) {
+      const tab = document.createElement('button');
+      tab.type = 'button';
+      tab.className = 't-tab';
+      tab.textContent = text;
+      tab.dataset.key = key;
+      tab.setAttribute('role', 'tab');
+      tab.setAttribute('aria-selected', String(v.leaderTab === key));
+      tab.addEventListener('click', () => {
+        v.leaderTab = key;
+        for (const other of tabs.children) other.setAttribute('aria-selected', String(other.dataset.key === key));
+        drawList();
+      });
+      tabs.append(tab);
     }
-    body.append(grid);
+    drawList();
+    body.append(tabs, list);
 
-    // b) Full player table, closed until its heading is tapped.
+    // Full player table, closed until its row is tapped.
     const showPens = v.matches.some((m) => m.status === 'finished' && v.scores[m.id] && v.scores[m.id].pens);
     const toggle = document.createElement('button');
     toggle.type = 'button';
-    toggle.className = 'section-label stat-toggle';
-    toggle.textContent = 'FULL PLAYER TABLE';
+    toggle.className = 'stat-toggle';
+    toggle.textContent = 'Full player table';
     toggle.setAttribute('aria-expanded', String(v.tableOpen));
     const wrap = document.createElement('div');
     wrap.className = 'standings-wrap';
@@ -2958,37 +3070,6 @@
     table.append(thead, tbody);
     wrap.append(table);
     body.append(toggle, wrap);
-
-    // c) Discipline: anyone with a card or a foul.
-    body.append(label('DISCIPLINE'));
-    const carded = stats.players
-      .filter((st) => st.reds + st.yellows + st.fouls > 0)
-      .sort((x, y) => y.reds - x.reds || y.yellows - x.yellows || y.fouls - x.fouls || byName(x, y));
-    if (!carded.length) body.append(noneYet());
-    const discipline = document.createElement('div');
-    discipline.className = 'player-list';
-    for (const st of carded) {
-      const row = document.createElement('div');
-      row.className = 'player-row disc-row';
-      const name = document.createElement('span');
-      name.className = 'player-name';
-      name.textContent = st.name;
-      row.append(dotFor(st.teamId), name);
-      for (const [n, cls] of [[st.yellows, 'y'], [st.reds, 'r']]) {
-        if (!n) continue;
-        const sliver = document.createElement('span');
-        sliver.className = `mk-card ${cls}`;
-        if (n > 1) sliver.textContent = String(n);
-        sliver.title = `${n} ${cls === 'y' ? 'yellow' : 'red'}`;
-        row.append(sliver);
-      }
-      const fouls = document.createElement('span');
-      fouls.className = 'disc-fouls num';
-      fouls.textContent = `${st.fouls} ${st.fouls === 1 ? 'foul' : 'fouls'}`;
-      row.append(fouls);
-      discipline.append(row);
-    }
-    if (carded.length) body.append(discipline);
   }
 
   function renderTournament() {
@@ -3094,32 +3175,50 @@
 
       table.append(thead, tbody);
       wrap.append(table);
-      // No finished match yet means no rows: leave the bare table header out.
-      if (v.standings.length) body.append(wrap);
-
-      // Every match in the tournament, grouped by state. An empty group is left out.
-      const group = (label, rows, fill) => {
-        if (!rows.length) return;
-        const heading = document.createElement('div');
-        heading.className = 'section-label t-group';
-        heading.textContent = label;
+      // CARD 1: every match in the tournament, grouped by state. An empty group is left out.
+      const live = v.matches.filter((m) => ['live', 'halftime', 'shootout'].includes(m.status));
+      const fixtures = v.matches.filter((m) => m.status === 'setup' || m.status === 'ready');
+      const results = v.matches.filter((m) => m.status === 'finished' || m.status === 'abandoned');
+      const matchesCard = statCard('Matches', `${results.length} played · ${fixtures.length} to come`);
+      if (live.length) {
+        const list = document.createElement('div');
+        list.className = 't-list live';
+        for (const m of live) list.append(matchCard(m, v.scores[m.id], { chips: false }));
+        matchesCard.body.append(cardBand('Live'), list);
+      }
+      if (fixtures.length) {
         const list = document.createElement('div');
         list.className = 't-list';
-        fill(list, rows);
-        body.append(heading, list);
-      };
-      group('LIVE', v.matches.filter((m) => ['live', 'halftime', 'shootout'].includes(m.status)), (list, rows) => {
-        for (const m of rows) list.append(matchCard(m, v.scores[m.id], { chips: false }));
-      });
-      group('FIXTURES', v.matches.filter((m) => m.status === 'setup' || m.status === 'ready'), (list, rows) => {
-        for (const m of rows) list.append(fixtureRow(m));
-      });
-      group('RESULTS', v.matches.filter((m) => m.status === 'finished' || m.status === 'abandoned'), (list, rows) => {
-        appendResultRows(list, rows, v.scores, { chips: false, del: false });
-      });
+        for (const m of fixtures) list.append(fixtureRow(m));
+        matchesCard.body.append(cardBand('Fixtures'), list);
+      }
+      // Results: a band per date, then that date's matches in a grid.
+      let dateKey = null;
+      let grid = null;
+      for (const m of results) {
+        if (matchDateKey(m) !== dateKey) {
+          dateKey = matchDateKey(m);
+          grid = document.createElement('div');
+          grid.className = 't-results';
+          matchesCard.body.append(cardBand(matchDateLabel(m)), grid);
+        }
+        grid.append(resultRow(m, v.scores[m.id], { chips: false, del: false, compact: true }));
+      }
+      body.append(matchesCard.card);
 
-      // Statistics need a finished match; v.stats stays null until one has loaded.
-      if (v.stats) appendTournamentStats(body, v);
+      // CARD 2: the points table. No finished match yet means no rows, so no card.
+      if (v.standings.length) {
+        const tableCard = statCard('Table');
+        tableCard.body.append(wrap);
+        body.append(tableCard.card);
+      }
+
+      // CARD 3: statistics need a finished match; v.stats stays null until one has loaded.
+      if (v.stats) {
+        const leadersCard = statCard('Stat leaders');
+        appendTournamentStats(leadersCard.body, v);
+        body.append(leadersCard.card);
+      }
     }
 
     if (isScorer) {
