@@ -170,6 +170,12 @@
   }
   .m-chip.amber { border-color: var(--amber); color: var(--amber); }
   .m-note { font-size: 12px; color: var(--muted); }
+  /* Tournaments list: the SERIES / TOURNAMENT tag and the finished marker sit after the name,
+     which is the part that shrinks on a narrow screen. */
+  /* Match setup, friendly mode: both carry a display of their own, which would beat [hidden]. */
+  #tournamentLabel[hidden], #pickTournamentWrap[hidden] { display: none; }
+  .kind-tag { flex: none; }
+  .t-finished { flex: none; font-size: 12px; color: var(--muted); }
   /* Tournament screen: LIVE / FIXTURES / RESULTS groups, and the fixture row */
   .t-group { padding: 20px 0 8px; color: var(--text); }
   .t-list { display: flex; flex-direction: column; }
@@ -863,7 +869,7 @@
 
         <div class="tiles">
           <button type="button" class="tile" id="tileTeams">TEAMS</button>
-          <button type="button" class="tile" id="tileTournament">TOURNAMENT</button>
+          <button type="button" class="tile" id="tileTournament">MATCH MODE</button>
           <button type="button" class="tile" id="tileSetup">SETUP</button>
         </div>
 
@@ -904,8 +910,8 @@
     <section class="screen" id="screenTournament" hidden>
     <section class="panel" id="tournamentPanel">
       <div class="panel-head">
-        <h2 id="tournamentHeading">Tournaments</h2>
-        <button type="button" id="tournamentHeadBtn" hidden>New tournament</button>
+        <h2 id="tournamentHeading">Match mode</h2>
+        <button type="button" id="tournamentHeadBtn" hidden>New</button>
       </div>
       <div id="tournamentBody"></div>
       <div class="panel-foot" id="tournamentStatus"></div>
@@ -917,8 +923,14 @@
         <h2 id="matchSetupHeading">New match</h2>
 
         <p class="setup-note" id="setupLockNote" hidden>Teams are locked once a line-up is saved. Delete the match and create it again to change them.</p>
-        <div class="field-label">Tournament</div>
-        <div class="player-list">
+        <div class="field-label">Match mode</div>
+        <div class="seg" id="matchMode">
+          <button type="button" class="toggle" data-mode="friendly" aria-pressed="false">Friendly</button>
+          <button type="button" class="toggle" data-mode="series" aria-pressed="false">Series</button>
+          <button type="button" class="toggle" data-mode="tournament" aria-pressed="false">Tournament</button>
+        </div>
+        <div class="field-label" id="tournamentLabel">Tournament</div>
+        <div class="player-list" id="pickTournamentWrap">
           <button type="button" class="player-row" id="pickTournament"></button>
         </div>
 
@@ -1098,12 +1110,25 @@
   </div>
 </div>
 
-<!-- New tournament -->
+<!-- New series / tournament: step one asks the kind, step two the details -->
 <div class="overlay" id="tournamentOverlay" role="dialog" aria-modal="true" aria-labelledby="tournamentTitle">
   <div class="modal" style="max-width:420px">
-    <h3 id="tournamentTitle">New tournament</h3>
-    <label class="field-label" for="tournamentName">Name</label>
-    <input class="text-input" id="tournamentName" type="text" autocomplete="off" maxlength="40">
+    <h3 id="tournamentTitle">New</h3>
+    <div id="tournamentKindField">
+      <div class="field-label">What are you creating?</div>
+      <div class="seg" id="tournamentKind">
+        <button type="button" class="toggle" data-kind="series" aria-pressed="false">Series</button>
+        <button type="button" class="toggle" data-kind="tournament" aria-pressed="false">Tournament</button>
+      </div>
+    </div>
+    <div id="tournamentDetailsField" hidden>
+      <label class="field-label" for="tournamentName">Name</label>
+      <input class="text-input" id="tournamentName" type="text" autocomplete="off" maxlength="40">
+      <div id="tournamentPlannedField" hidden>
+        <label class="field-label" for="tournamentPlanned">Matches planned</label>
+        <input class="text-input" id="tournamentPlanned" type="number" min="1" max="50" value="5" inputmode="numeric">
+      </div>
+    </div>
     <div class="form-msg" id="tournamentMsg" aria-live="polite"></div>
     <div class="modal-actions">
       <button type="button" id="tournamentCancel">Cancel</button>
@@ -1351,7 +1376,7 @@
     }
     if ($('tournamentOverlay').classList.contains('open')) {
       if (e.key === 'Escape') closeTournamentForm();
-      else if (e.key === 'Enter' && e.target === $('tournamentName')) saveTournament();
+      else if (e.key === 'Enter' && (e.target === $('tournamentName') || e.target === $('tournamentPlanned'))) saveTournament();
       return;
     }
     if ($('teamOverlay').classList.contains('open')) {
@@ -1954,16 +1979,21 @@
   $('teamOverlay').addEventListener('click', (e) => { if (e.target === e.currentTarget) closeTeamPanel(); });
 
   // ---------- Match setup ----------
-  const matchSetup = { teamA: null, teamB: null, size: 6, kickoff: null, busy: false, picking: null, tournament: null, editing: null };
+  const matchSetup = { teamA: null, teamB: null, size: 6, kickoff: null, busy: false, picking: null, tournament: null, editing: null, mode: 'friendly' };
   // editing holds the match row being edited, or null when creating.
+  // mode is 'friendly', 'series' or 'tournament'. A series and a tournament are both rows of
+  // the tournaments table, told apart by kind; a friendly has no row and tournament stays null.
   // Where the settings screen goes back to: 'launch', 'match' or 'lineup'. Set by the entry point.
   let matchSetupReturn = 'launch';
 
   function openMatchSetup(tournament) {
     matchSetup.editing = null;
     matchSetupReturn = 'launch';
-    // A tournament passed in wins; otherwise the newest tournament, or a friendly.
-    matchSetup.tournament = tournament || tournaments[0] || null;
+    // A row passed in (the scorer came from inside a competition) sets the mode and the pick.
+    // Otherwise nothing is preselected: the mode buttons are the first choice made, so a
+    // friendly is never silently filed under a competition.
+    matchSetup.tournament = tournament || null;
+    matchSetup.mode = tournament ? (tournament.kind || 'tournament') : 'friendly';
     matchSetup.teamA = null;
     matchSetup.teamB = null;
     matchSetup.size = 6;
@@ -2004,6 +2034,7 @@
 
     matchSetup.editing = row;
     matchSetup.tournament = tournaments.find((t) => t.id === row.tournament_id) || null;
+    matchSetup.mode = matchSetup.tournament ? (matchSetup.tournament.kind || 'tournament') : 'friendly';
     matchSetup.teamA = teamById(row.team_a_id);
     matchSetup.teamB = teamById(row.team_b_id);
     matchSetup.size = Number(row.match_type);
@@ -2046,6 +2077,16 @@
     $('setupSizeNote').hidden = !(locked && matchSetup.size !== Number(editing.match_type));
     for (const id of ['pickTournament', 'pickTeamA', 'pickTeamB']) $(id).disabled = locked;
 
+    const mode = matchSetup.mode;
+    for (const btn of $('matchMode').children) {
+      btn.setAttribute('aria-pressed', String(btn.dataset.mode === mode));
+      btn.disabled = locked;
+    }
+    // A friendly has no competition, so the label and the pick row go away entirely.
+    $('tournamentLabel').hidden = mode === 'friendly';
+    $('pickTournamentWrap').hidden = mode === 'friendly';
+    $('tournamentLabel').textContent = mode === 'series' ? 'Series' : 'Tournament';
+
     const tournamentBtn = $('pickTournament');
     const tournamentName = document.createElement('span');
     tournamentBtn.replaceChildren(tournamentName);
@@ -2054,7 +2095,7 @@
       tournamentName.textContent = matchSetup.tournament.name;
     } else {
       tournamentName.style.color = 'var(--muted)';
-      tournamentName.textContent = 'No tournament (friendly)';
+      tournamentName.textContent = mode === 'series' ? 'Choose a series' : 'Choose a tournament';
     }
 
     for (const slot of ['A', 'B']) {
@@ -2099,24 +2140,42 @@
 
   // Reuses the team picker overlay as a plain pick list.
   function openTournamentPick() {
-    $('teamPickTitle').textContent = 'Choose tournament';
+    const mode = matchSetup.mode;
+    if (mode === 'friendly') return;
+    const isSeries = mode === 'series';
+    $('teamPickTitle').textContent = isSeries ? 'Choose series' : 'Choose tournament';
     const list = $('teamPickList');
     list.replaceChildren();
-    for (const t of [null, ...tournaments]) {
+    // Only the chosen kind, and only active rows: a finished series takes no new matches.
+    for (const t of tournaments.filter((d) => d.kind === mode && d.status === 'active')) {
       const row = document.createElement('button');
       row.type = 'button';
       row.className = 'player-row';
       const name = document.createElement('span');
       name.className = 'player-name';
-      name.textContent = t ? t.name : 'No tournament (friendly)';
+      name.textContent = t.name;
       row.append(name);
       row.addEventListener('click', () => {
         matchSetup.tournament = t;
+        $('matchMsg').textContent = '';
         closeTeamPick();
         renderMatchSetup();
       });
       list.append(row);
     }
+    // Last row: make a new one without leaving match setup.
+    const add = document.createElement('button');
+    add.type = 'button';
+    add.className = 'player-row';
+    const addName = document.createElement('span');
+    addName.style.color = 'var(--muted)';
+    addName.textContent = isSeries ? 'New series…' : 'New tournament…';
+    add.append(addName);
+    add.addEventListener('click', () => {
+      closeTeamPick();
+      openTournamentForm({ kind: mode, fromSetup: true });
+    });
+    list.append(add);
     $('teamPickOverlay').classList.add('open');
   }
 
@@ -2161,9 +2220,65 @@
     return Number.isNaN(n) || n < Number(input.min) ? fallback : n;
   }
 
+  // The competition a match is written under: null for a friendly, else the chosen row's id.
+  function setupTournamentId() {
+    return matchSetup.mode !== 'friendly' && matchSetup.tournament ? matchSetup.tournament.id : null;
+  }
+
+  // Series and tournament modes need a row chosen. Returns the message to show, or ''.
+  function missingCompetitionMsg() {
+    if (matchSetup.mode === 'friendly' || matchSetup.tournament) return '';
+    return matchSetup.mode === 'series' ? 'Choose a series' : 'Choose a tournament';
+  }
+
+  // The series rules, checked before a match is written into one. Returns the refusal to show,
+  // or '' when the match may go ahead. excludeId is the match being edited, which must not
+  // count against itself. Throws on a failed query, like any other load.
+  async function seriesRefusal(excludeId) {
+    const series = matchSetup.tournament;
+    if (matchSetup.mode !== 'series' || !series) return '';
+    // The open competition's matches are already in memory; anything else is asked for.
+    let existing;
+    const v = tournamentView;
+    if (v.selected && v.selected.id === series.id && !v.busy && v.matches.length) {
+      existing = v.matches;
+    } else {
+      const { data, error } = await getClient()
+        .from('matches')
+        .select('id, team_a_id, team_b_id')
+        .eq('tournament_id', series.id);
+      if (error) throw error;
+      existing = data || [];
+    }
+    existing = existing.filter((m) => m.id !== excludeId);
+    if (!existing.length) return '';
+
+    // A series is one pair of teams playing each other a planned number of times, won by
+    // whoever leads at the end. A best-of-five means nothing with a third team in it, so
+    // every match after the first must be between the same two teams.
+    const inSeries = new Set();
+    for (const m of existing) {
+      inSeries.add(m.team_a_id);
+      inSeries.add(m.team_b_id);
+    }
+    const outsider = [matchSetup.teamA, matchSetup.teamB].find((team) => !inSeries.has(team.id));
+    if (outsider) return `A series is between the same two teams. ${outsider.name} is not in this series.`;
+
+    const planned = Number(series.planned_matches);
+    if (planned && existing.length >= planned) {
+      return `This series has played all ${planned} matches. Finish it, or raise the planned matches.`;
+    }
+    return '';
+  }
+
   async function createMatch() {
     if (state.role !== 'scorer') return;
     if (matchSetup.busy) return;
+    const missing = missingCompetitionMsg();
+    if (missing) {
+      $('matchMsg').textContent = missing;
+      return;
+    }
     const firstHalf = readMinutes('firstHalf', 15) * 60;
     const breakSecs = readMinutes('breakMins', 5) * 60;
     const secondHalf = readMinutes('secondHalf', 15) * 60;
@@ -2171,6 +2286,13 @@
     matchSetup.busy = true;
     renderMatchSetup();
     try {
+      const refusal = await seriesRefusal(null);
+      if (refusal) {
+        $('matchMsg').textContent = refusal;
+        matchSetup.busy = false;
+        renderMatchSetup();
+        return;
+      }
       const { error } = await getClient().from('matches')
         .insert({
           team_a_id: matchSetup.teamA.id,
@@ -2180,7 +2302,7 @@
           break_secs: breakSecs,
           second_half_secs: secondHalf,
           kickoff_team_id: matchSetup.kickoff || matchSetup.teamA.id,
-          tournament_id: matchSetup.tournament ? matchSetup.tournament.id : null,
+          tournament_id: setupTournamentId(),
           status: 'setup'
         })
         .select('id')
@@ -2212,15 +2334,29 @@
     // Teams and tournament are written for a 'setup' match only. A 'ready' match has
     // match_players rows for its two squads; changing the teams would leave a line-up
     // belonging to a team that is no longer playing.
-    if (editing.status === 'setup') {
+    // The mode checks apply to the same case: a 'ready' match keeps the competition it has.
+    const writesCompetition = editing.status === 'setup';
+    if (writesCompetition) {
+      const missing = missingCompetitionMsg();
+      if (missing) {
+        $('matchMsg').textContent = missing;
+        return;
+      }
       fields.team_a_id = matchSetup.teamA.id;
       fields.team_b_id = matchSetup.teamB.id;
-      fields.tournament_id = matchSetup.tournament ? matchSetup.tournament.id : null;
+      fields.tournament_id = setupTournamentId();
     }
 
     matchSetup.busy = true;
     renderMatchSetup();
     try {
+      const refusal = writesCompetition ? await seriesRefusal(editing.id) : '';
+      if (refusal) {
+        $('matchMsg').textContent = refusal;
+        matchSetup.busy = false;
+        renderMatchSetup();
+        return;
+      }
       // The status filter stops a save landing on a match that moved on (line-up saved,
       // kicked off) since this screen was opened. No row back means nothing was changed.
       const { data, error } = await getClient().from('matches')
@@ -2672,6 +2808,16 @@
   $('pickTeamB').addEventListener('click', () => openTeamPick('B'));
   $('teamPickCancel').addEventListener('click', closeTeamPick);
   $('teamPickOverlay').addEventListener('click', (e) => { if (e.target === e.currentTarget) closeTeamPick(); });
+  $('matchMode').addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-mode]');
+    if (!btn || btn.disabled) return;
+    if (btn.dataset.mode === matchSetup.mode) return;
+    matchSetup.mode = btn.dataset.mode;
+    // The previous pick belongs to the other kind.
+    matchSetup.tournament = null;
+    $('matchMsg').textContent = '';
+    renderMatchSetup();
+  });
   $('matchType').addEventListener('click', (e) => {
     const btn = e.target.closest('button[data-size]');
     if (!btn) return;
@@ -2691,10 +2837,19 @@
     try {
       const { data, error } = await getClient()
         .from('tournaments')
-        .select('id, name, created_at')
+        .select('id, name, created_at, kind, planned_matches, status, winner_team_id')
         .order('created_at', { ascending: false });
       if (error) throw error;
-      tournaments = data || [];
+      // kind tells a series from a tournament; both live in this one table.
+      tournaments = (data || []).map((t) => ({
+        id: t.id,
+        name: t.name,
+        created_at: t.created_at,
+        kind: t.kind || 'tournament',
+        planned_matches: t.planned_matches == null ? null : Number(t.planned_matches),
+        status: t.status || 'active',
+        winner_team_id: t.winner_team_id || null
+      }));
     } catch (err) {
       tournaments = [];
       console.error('Pitchside tournament load failed:', err);
@@ -3080,20 +3235,34 @@
     body.replaceChildren();
 
     if (!v.selected) {
-      $('tournamentHeading').textContent = 'Tournaments';
-      headBtn.textContent = 'New tournament';
+      $('tournamentHeading').textContent = 'Match mode';
+      headBtn.textContent = 'New';
       headBtn.hidden = !isScorer;
 
       const list = document.createElement('div');
       list.className = 'player-list';
-      for (const t of tournaments) {
+      // Active rows first; within each group the newest-first load order is kept.
+      const ordered = [
+        ...tournaments.filter((t) => t.status !== 'finished'),
+        ...tournaments.filter((t) => t.status === 'finished')
+      ];
+      for (const t of ordered) {
         const row = document.createElement('button');
         row.type = 'button';
         row.className = 'player-row';
         const name = document.createElement('span');
         name.className = 'player-name';
         name.textContent = t.name;
-        row.append(name);
+        const tag = document.createElement('span');
+        tag.className = 'm-chip kind-tag';
+        tag.textContent = t.kind === 'series' ? 'SERIES' : 'TOURNAMENT';
+        row.append(name, tag);
+        if (t.status === 'finished') {
+          const done = document.createElement('span');
+          done.className = 't-finished';
+          done.textContent = 'Finished';
+          row.append(done);
+        }
         row.addEventListener('click', () => openTournament(t));
         list.append(row);
       }
@@ -3238,14 +3407,38 @@
   // ---------- New / delete tournament ----------
   let tournamentFormBusy = false;
 
-  function openTournamentForm() {
+  // The form has two steps. Step one asks the kind, Series or Tournament, and nothing is
+  // preselected, so nothing can be created without that choice being made. Step two asks the
+  // details for that kind. kind is null until chosen. fromSetup is true when the form was
+  // opened from the match-setup picker: the kind is already chosen there, so step one is
+  // skipped, and the new row goes straight back into match setup.
+  const tournamentForm = { kind: null, fromSetup: false };
+
+  function renderTournamentForm() {
+    const kind = tournamentForm.kind;
+    const isSeries = kind === 'series';
+    $('tournamentTitle').textContent = !kind ? 'New' : isSeries ? 'New series' : 'New tournament';
+    $('tournamentKindField').hidden = !!kind;
+    $('tournamentDetailsField').hidden = !kind;
+    $('tournamentSave').hidden = !kind;
+    // Only a series has a planned number of matches.
+    $('tournamentPlannedField').hidden = !isSeries;
+  }
+
+  function openTournamentForm(opts) {
     if (state.role !== 'scorer') return;
+    const kind = opts && opts.kind;
+    tournamentForm.kind = kind === 'series' || kind === 'tournament' ? kind : null;
+    tournamentForm.fromSetup = !!(opts && opts.fromSetup);
+    $('tournamentPlanned').value = 5;
+    renderTournamentForm();
     tournamentFormBusy = false;
     $('tournamentName').value = '';
     $('tournamentMsg').textContent = '';
     $('tournamentSave').disabled = false;
     $('tournamentOverlay').classList.add('open');
-    $('tournamentName').focus();
+    if (tournamentForm.kind) $('tournamentName').focus();
+    else $('tournamentKind').firstElementChild.focus();
   }
 
   function closeTournamentForm() {
@@ -3261,19 +3454,45 @@
       return;
     }
     if (tournaments.some((t) => String(t.name || '').toLowerCase() === name.toLowerCase())) {
-      $('tournamentMsg').textContent = 'A tournament with that name already exists';
+      $('tournamentMsg').textContent = 'A series or tournament with that name already exists';
       return;
+    }
+    const kind = tournamentForm.kind;
+    if (kind !== 'series' && kind !== 'tournament') return;
+    const fromSetup = tournamentForm.fromSetup;
+    // A tournament has no fixed match count and stores null.
+    let planned = null;
+    if (kind === 'series') {
+      const raw = $('tournamentPlanned').value.trim();
+      planned = Number(raw);
+      if (!/^\d+$/.test(raw) || planned < 1 || planned > 50) {
+        $('tournamentMsg').textContent = 'Enter the number of matches planned, from 1 to 50';
+        return;
+      }
     }
 
     tournamentFormBusy = true;
     $('tournamentSave').disabled = true;
     $('tournamentMsg').textContent = '';
     try {
-      const { error } = await getClient().from('tournaments').insert({ name });
+      const { data, error } = await getClient().from('tournaments')
+        .insert({ name, kind, planned_matches: planned, status: 'active' })
+        .select('id')
+        .single();
       if (error) throw error;
       await loadTournaments();
       closeTournamentForm();
       renderTournament();
+      if (fromSetup) {
+        // Created from the match-setup picker: the new row becomes the pick.
+        const created = tournaments.find((t) => t.id === data.id);
+        if (created) {
+          matchSetup.mode = created.kind;
+          matchSetup.tournament = created;
+          $('matchMsg').textContent = '';
+        }
+        renderMatchSetup();
+      }
     } catch (err) {
       tournamentFormBusy = false;
       $('tournamentSave').disabled = false;
@@ -3343,6 +3562,14 @@
   $('tournamentHeadBtn').addEventListener('click', () => {
     if (tournamentView.selected) openTournaments();
     else openTournamentForm();
+  });
+  $('tournamentKind').addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-kind]');
+    if (!btn || tournamentFormBusy) return;
+    tournamentForm.kind = btn.dataset.kind;
+    $('tournamentMsg').textContent = '';
+    renderTournamentForm();
+    $('tournamentName').focus();
   });
   $('tournamentSave').addEventListener('click', saveTournament);
   $('tournamentCancel').addEventListener('click', closeTournamentForm);
