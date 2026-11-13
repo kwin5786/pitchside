@@ -2420,7 +2420,7 @@
       // recomputed from goal events on each load, which is fine at office-league scale.
       const { data, error } = await getClient()
         .from('matches')
-        .select('id, status, match_type, team_a_id, team_b_id, created_at, kicked_off_at, tournament_id, extra_secs, current_half, half_started_at, paused_secs, is_running, first_half_secs, second_half_secs, tournaments(name)')
+        .select('id, status, match_type, team_a_id, team_b_id, created_at, kicked_off_at, tournament_id, extra_secs, current_half, half_started_at, paused_secs, is_running, first_half_secs, second_half_secs, tournaments(name, kind, planned_matches)')
         .order('created_at', { ascending: false });
       if (error) throw error;
       matches = data || [];
@@ -2595,6 +2595,19 @@
     );
 
     btn.append(head, lines);
+    // Series progress, on the launch screen only: rows drawn on the tournament screen carry
+    // no tournaments join, and the Matches card there already says the same thing.
+    if (m.tournaments && m.tournaments.kind === 'series' && m.tournaments.planned_matches) {
+      // An abandoned match used up one of the planned matches, so it counts as played.
+      const played = matches.filter((d) => d.tournament_id === m.tournament_id
+        && (d.status === 'finished' || d.status === 'abandoned')).length;
+      const planned = Number(m.tournaments.planned_matches);
+      const progress = document.createElement('div');
+      progress.className = 'm-note';
+      // This card is always a match not yet finished, so it is the one in hand.
+      progress.textContent = played + 1 <= planned ? `Match ${played + 1} of ${planned}` : `${played} of ${planned} played`;
+      btn.append(progress);
+    }
     if (showChips) btn.append(matchChips(m));
     return btn;
   }
@@ -3227,6 +3240,9 @@
     body.append(toggle, wrap);
   }
 
+  // Series and tournament share one table; the on-screen word follows kind.
+  function kindWord(t) { return t && t.kind === 'series' ? 'series' : 'tournament'; }
+
   function renderTournament() {
     const isScorer = state.role === 'scorer';
     const v = tournamentView;
@@ -3269,7 +3285,7 @@
       if (!tournaments.length) {
         const empty = document.createElement('div');
         empty.className = 'empty';
-        empty.textContent = 'No tournaments yet';
+        empty.textContent = 'Nothing yet — tap New to add a series or a tournament';
         list.append(empty);
       }
       body.append(list);
@@ -3277,10 +3293,11 @@
     }
 
     $('tournamentHeading').textContent = v.selected.name;
-    headBtn.textContent = 'All tournaments';
+    headBtn.textContent = v.selected.kind === 'series' ? 'All series' : 'All tournaments';
     headBtn.hidden = false;
 
-    if (isScorer) {
+    // A finished competition takes no new matches.
+    if (isScorer && v.selected.status !== 'finished') {
       const start = document.createElement('button');
       start.type = 'button';
       start.className = 'primary';
@@ -3288,6 +3305,42 @@
       start.textContent = 'Start a match';
       start.addEventListener('click', () => openMatchSetup(tournamentView.selected));
       body.append(start);
+    }
+
+    if (v.selected.status === 'finished') {
+      const champion = statCard('Champion');
+      const box = document.createElement('div');
+      box.className = 'm-body';
+      box.style.cssText = 'padding:0 14px 12px;';
+      const winner = teamById(v.selected.winner_team_id);
+      if (winner) {
+        const line = document.createElement('div');
+        line.className = 'm-team won';
+        const dot = document.createElement('span');
+        dot.className = 'colour-dot';
+        dot.style.background = winner.colour;
+        const name = document.createElement('span');
+        name.className = 'player-name';
+        name.textContent = winner.name;
+        line.append(dot, name);
+        box.append(line);
+        // The record comes from the table; while that is still loading the line is left out.
+        const r = v.standings.find((d) => d.teamId === winner.id);
+        if (r) {
+          const record = document.createElement('div');
+          record.className = 'm-note';
+          record.textContent = `P ${r.p} · W ${r.w} · D ${r.d} · L ${r.l} · GF ${r.gf} · GA ${r.ga} · Pts ${r.pts}`;
+          box.append(record);
+        }
+      } else {
+        // No winner recorded means the top two finished dead level.
+        const line = document.createElement('div');
+        line.className = 'm-team';
+        line.textContent = 'Shared — finished level';
+        box.append(line);
+      }
+      champion.body.append(box);
+      body.append(champion.card);
     }
 
     if (v.busy && !v.matches.length) {
@@ -3348,7 +3401,17 @@
       const live = v.matches.filter((m) => ['live', 'halftime', 'shootout'].includes(m.status));
       const fixtures = v.matches.filter((m) => m.status === 'setup' || m.status === 'ready');
       const results = v.matches.filter((m) => m.status === 'finished' || m.status === 'abandoned');
-      const matchesCard = statCard('Matches', `${results.length} played · ${fixtures.length} to come`);
+      // A series with a planned count shows where it stands; a tournament keeps its wording.
+      // results includes abandoned matches: one of those used up a planned match.
+      const pending = live.length + fixtures.length;
+      const played = results.length;
+      const plannedCount = v.selected.kind === 'series' ? v.selected.planned_matches : null;
+      const subtitle = plannedCount
+        ? (pending > 0 && played + 1 <= plannedCount
+          ? `Match ${played + 1} of ${plannedCount}`
+          : `${played} of ${plannedCount} played`)
+        : `${results.length} played · ${fixtures.length} to come`;
+      const matchesCard = statCard('Matches', subtitle);
       if (live.length) {
         const list = document.createElement('div');
         list.className = 't-list live';
@@ -3391,11 +3454,22 @@
     }
 
     if (isScorer) {
+      const isFinished = v.selected.status === 'finished';
+      const finish = document.createElement('button');
+      finish.type = 'button';
+      // Reopen is the quieter of the two, so it stays a plain button.
+      if (!isFinished) finish.className = 'primary';
+      finish.style.cssText = 'width:100%; margin-top:14px;';
+      finish.textContent = `${isFinished ? 'Reopen' : 'Finish'} ${kindWord(v.selected)}`;
+      finish.disabled = v.busy;
+      finish.addEventListener('click', () => (isFinished ? confirmReopenCompetition(v.selected) : confirmFinishCompetition(v.selected)));
+      body.append(finish);
+
       const del = document.createElement('button');
       del.type = 'button';
       del.className = 'danger';
       del.style.cssText = 'width:100%; margin-top:14px;';
-      del.textContent = 'Delete tournament';
+      del.textContent = `Delete ${kindWord(v.selected)}`;
       del.disabled = v.busy;
       del.addEventListener('click', () => confirmDeleteTournament(v.selected));
       body.append(del);
@@ -3525,16 +3599,16 @@
     tournamentView.busy = false;
     renderTournament();
     if (count > 0) {
-      setTournamentStatus('This tournament has matches. Delete its matches first.', true);
+      setTournamentStatus(`This ${kindWord(t)} has matches. Delete its matches first.`, true);
       return;
     }
     showConfirm({
-      title: 'Delete tournament?',
+      title: `Delete ${kindWord(t)}?`,
       text: `${t.name} will be permanently removed.`,
       okLabel: 'Delete',
       onConfirm: () => openPinFor({
         title: 'Confirm delete',
-        text: 'Enter the scorer PIN to delete this tournament.',
+        text: `Enter the scorer PIN to delete this ${kindWord(t)}.`,
         onOk: () => deleteTournament(t)
       })
     });
@@ -3557,6 +3631,101 @@
       renderTournament();
       console.error('Pitchside tournament delete failed:', err);
     }
+  }
+
+  // The winner of a finished competition: most points, then goal difference, then goals for.
+  // v.standings is already sorted on exactly that order. A dead-level top two is Shared.
+  function competitionWinner(v) {
+    const rows = v.standings;
+    if (!rows.length) return { row: null, shared: false };
+    const top = rows[0];
+    const next = rows[1];
+    const shared = !!next && next.pts === top.pts && next.gd === top.gd && next.gf === top.gf;
+    return { row: shared ? null : top, shared };
+  }
+
+  async function confirmFinishCompetition(t) {
+    if (state.role !== 'scorer' || !t || tournamentView.busy) return;
+    const v = tournamentView;
+    const word = kindWord(t);
+    if (v.matches.some((m) => ['live', 'halftime', 'shootout'].includes(m.status))) {
+      setTournamentStatus('Finish the live match first.', true);
+      renderTournament();
+      return;
+    }
+    const finished = v.matches.filter((m) => m.status === 'finished');
+    if (finished.length === 0) {
+      setTournamentStatus(`No finished matches yet — there is nothing to decide.`, true);
+      renderTournament();
+      return;
+    }
+    setTournamentStatus('', false);
+    const { row, shared } = competitionWinner(v);
+    const winnerLine = shared || !row
+      ? 'It finishes level — no winner will be recorded.'
+      : `${row.name} wins with ${row.pts} points.`;
+    // Finishing early is allowed, but never without saying what is being left unplayed.
+    let warningLine = '';
+    if (t.kind === 'series') {
+      const planned = t.planned_matches;
+      const played = v.matches.filter((m) => m.status === 'finished' || m.status === 'abandoned').length;
+      if (planned && played < planned) warningLine = `Only ${played} of ${planned} matches have been played.`;
+    } else {
+      const n = v.matches.filter((m) => m.status === 'setup' || m.status === 'ready').length;
+      if (n) warningLine = `${n} match${n === 1 ? '' : 'es'} have not been played.`;
+    }
+    // No PIN: finishing is reversible and the scorer role is already PIN-gated.
+    showConfirm({
+      title: `Finish ${word}?`,
+      text: [winnerLine, warningLine].filter(Boolean).join(' '),
+      okLabel: 'Finish',
+      onConfirm: () => finishCompetition(t, row ? row.teamId : null)
+    });
+  }
+
+  function confirmReopenCompetition(t) {
+    if (state.role !== 'scorer' || !t || tournamentView.busy) return;
+    const word = kindWord(t);
+    setTournamentStatus('', false);
+    showConfirm({
+      title: `Reopen ${word}?`,
+      text: `${t.name} will take new matches again and its winner is cleared.`,
+      okLabel: 'Reopen',
+      onConfirm: () => reopenCompetition(t)
+    });
+  }
+
+  // Finish and reopen write the same two columns; only the values differ.
+  async function setCompetitionStatus(t, fields) {
+    if (state.role !== 'scorer') return;
+    tournamentView.busy = true;
+    renderTournament();
+    try {
+      const { error } = await getClient().from('tournaments').update(fields).eq('id', t.id);
+      if (error) throw error;
+    } catch (err) {
+      tournamentView.busy = false;
+      setTournamentStatus(describeError(err), true);
+      renderTournament();
+      console.error('Pitchside tournament status update failed:', err);
+      return;
+    }
+    await loadTournaments();
+    // Re-point the open view at the refreshed row: v.selected still holds the old status,
+    // and without this the screen would not change.
+    const fresh = tournaments.find((d) => d.id === t.id);
+    if (fresh) tournamentView.selected = fresh;
+    tournamentView.busy = false;
+    setTournamentStatus('', false);
+    renderTournament();
+  }
+
+  function finishCompetition(t, winnerId) {
+    return setCompetitionStatus(t, { status: 'finished', winner_team_id: winnerId });
+  }
+
+  function reopenCompetition(t) {
+    return setCompetitionStatus(t, { status: 'active', winner_team_id: null });
   }
 
   $('tournamentHeadBtn').addEventListener('click', () => {
