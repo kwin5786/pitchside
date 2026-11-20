@@ -358,6 +358,7 @@
     font-weight: 600;
     font-size: 15px;
   }
+  .initials.jersey { font-size: 1.15em; letter-spacing: 0.5px; }
   .player-name {
     min-width: 0;
     overflow: hidden;
@@ -1696,7 +1697,7 @@
     { hex: '#E2E8F0', ink: '#141413', label: 'White' }
   ];
 
-  let teams = [];          // each: { id, name, colour, tournament_id, is_quickplay, memberIds: [playerId] }
+  let teams = [];          // each: { id, name, colour, tournament_id, is_quickplay, memberIds: [playerId], numbers: { playerId: number } }
   let teamsLoaded = false;
 
   function setTeamsStatus(text, isError) {
@@ -1709,7 +1710,7 @@
     try {
       const { data, error, status, statusText } = await getClient()
         .from('teams')
-        .select('id, name, colour, tournament_id, is_quickplay, team_players(player_id)')
+        .select('id, name, colour, tournament_id, is_quickplay, team_players(player_id, jersey_number)')
         .order('name', { ascending: true });
 
       if (error) {
@@ -1723,7 +1724,8 @@
         colour: t.colour,
         tournament_id: t.tournament_id,
         is_quickplay: t.is_quickplay,
-        memberIds: (t.team_players || []).map((tp) => tp.player_id)
+        memberIds: (t.team_players || []).map((tp) => tp.player_id),
+        numbers: Object.fromEntries((t.team_players || []).filter((tp) => tp.jersey_number !== null && tp.jersey_number !== undefined).map((tp) => [tp.player_id, tp.jersey_number]))
       }));
       teamsLoaded = true;
       renderTeams();
@@ -2478,6 +2480,18 @@
     return teams.find((t) => t.id === id) || null;
   }
 
+  function jerseyNo(teamId, playerId) {
+    const t = teamById(teamId);
+    const n = t && t.numbers ? t.numbers[playerId] : undefined;
+    return (n === 0 || n) ? String(n) : null;
+  }
+
+  function setBadge(badge, teamId, playerId, name) {
+    const n = teamId ? jerseyNo(teamId, playerId) : null;
+    badge.textContent = n || initials(name);
+    badge.classList.toggle('jersey', !!n);
+  }
+
   function matchResultTag(m, score) {
     if (m.status === 'abandoned') return 'ABD';
     if (score && score.pens) return 'PENS';
@@ -3173,7 +3187,7 @@
         pos.textContent = String(1 + ranked.filter((o) => o[key] > st[key]).length);
         const badge = document.createElement('span');
         badge.className = 'initials';
-        badge.textContent = initials(st.name);
+        setBadge(badge, st.teamId, st.playerId, st.name);
         if (team) badge.style.background = team.colour;
         badge.style.color = swatch ? swatch.ink : '#fff';
         const who = document.createElement('div');
@@ -3873,7 +3887,7 @@
 
         const badge = document.createElement('span');
         badge.className = 'initials';
-        badge.textContent = initials(p.name);
+        setBadge(badge, side.id, p.id, p.name);
 
         const pname = document.createElement('span');
         pname.className = 'player-name';
@@ -4577,7 +4591,7 @@
           wrap.className = 'badge-wrap';
           const badge = document.createElement('span');
           badge.className = 'initials';
-          badge.textContent = initials(r.player.name);
+          setBadge(badge, teamId, r.player_id, r.player.name);
           if (team) badge.style.background = team.colour;
           badge.style.color = ink;
           wrap.append(badge);
@@ -4845,7 +4859,7 @@
 
         const badge = document.createElement('span');
         badge.className = 'initials';
-        badge.textContent = initials(r.player.name);
+        setBadge(badge, s.teamId, r.player_id, r.player.name);
         badge.style.background = s.colour;
         badge.style.color = ink;
         wrap.append(badge);
@@ -5240,7 +5254,7 @@
         wrap.className = 'badge-wrap';
         const badge = document.createElement('span');
         badge.className = 'initials';
-        badge.textContent = initials(r.player.name);
+        setBadge(badge, s.teamId, r.player_id, r.player.name);
         if (team) badge.style.background = team.colour;
         wrap.append(badge);
         appendMarkers(wrap, r.player_id);
@@ -5393,7 +5407,7 @@
 
         const badge = document.createElement('span');
         badge.className = 'initials';
-        badge.textContent = initials(r.player.name);
+        setBadge(badge, subFlow.teamId, r.player_id, r.player.name);
 
         const name = document.createElement('span');
         name.className = 'player-name';
@@ -5443,7 +5457,7 @@
 
       const badge = document.createElement('span');
       badge.className = 'initials';
-      badge.textContent = initials(r.player.name);
+      setBadge(badge, r.team_id, r.player_id, r.player.name);
 
       const name = document.createElement('span');
       name.className = 'player-name';
@@ -5913,14 +5927,14 @@
       .sort((a, b) => a.name.localeCompare(b.name));
   }
 
-  function eventPlayerRow(p, onPick) {
+  function eventPlayerRow(p, onPick, teamId) {
     const row = document.createElement('button');
     row.type = 'button';
     row.className = 'player-row';
 
     const badge = document.createElement('span');
     badge.className = 'initials';
-    badge.textContent = initials(p.name);
+    setBadge(badge, teamId, p.id, p.name);
 
     const name = document.createElement('span');
     name.className = 'player-name';
@@ -5948,10 +5962,10 @@
     return btn;
   }
 
-  function eventPlayerList(list, onPick) {
+  function eventPlayerList(list, onPick, teamId) {
     const wrap = document.createElement('div');
     wrap.className = 'squad-picker';
-    for (const p of list) wrap.append(eventPlayerRow(p, () => onPick(p)));
+    for (const p of list) wrap.append(eventPlayerRow(p, () => onPick(p), teamId));
     if (!list.length) {
       const empty = document.createElement('div');
       empty.className = 'empty';
@@ -5993,7 +6007,7 @@
         f.data.player_id = p.id;
         f.step = 'penResult';
         renderEventStep();
-      });
+      }, f.team);
       takers.forEach((p, i) => {
         if (kicks(p.id) === min) return;
         wrap.children[i].disabled = true;
@@ -6053,7 +6067,7 @@
         } else {
           commitEvent();
         }
-      });
+      }, f.team);
       // Mark anyone who is not currently on the pitch, so a bench player is not carded by mistake.
       candidates.forEach((r, i) => {
         if (r.on_pitch || !wrap.children[i]) return;
@@ -6071,7 +6085,7 @@
       step.append(eventPlayerList(list, (p) => {
         f.data.assist_player_id = p.id;
         commitEvent();
-      }));
+      }, f.team));
     } else if (f.step === 'cardType') {
       $('eventTitle').textContent = 'Card';
       const seg = document.createElement('div');
@@ -6098,7 +6112,7 @@
         step.append(eventPlayerList(onPitchOf(f.team), (p) => {
           f.data.player_id = p.id;
           commitEvent();
-        }));
+        }, f.team));
       }
     }
   }
