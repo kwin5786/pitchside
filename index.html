@@ -1187,6 +1187,31 @@
   </div>
 </div>
 
+<!-- Add player mid-match -->
+<div class="overlay" id="addPlayerOverlay" role="dialog" aria-modal="true" aria-labelledby="addPlayerTitle">
+  <div class="modal" style="max-width:460px">
+    <h3 id="addPlayerTitle">Add player</h3>
+    <div class="seg" id="addPlayerTeam"></div>
+    <input class="text-input" id="addPlayerSearch" type="text" autocomplete="off" placeholder="Search players" aria-label="Search players">
+    <div class="squad-picker" id="addPlayerList"></div>
+    <div id="addPlayerNew" hidden>
+      <label class="field-label" for="addPlayerNewName">Name</label>
+      <input class="text-input" id="addPlayerNewName" type="text" autocomplete="off" maxlength="80">
+      <label class="field-label">Gender</label>
+      <div class="seg" id="addPlayerNewGender">
+        <button type="button" class="toggle" data-gender="M" aria-pressed="false">M</button>
+        <button type="button" class="toggle" data-gender="F" aria-pressed="false">F</button>
+      </div>
+    </div>
+    <div class="form-msg" id="addPlayerMsg" aria-live="polite"></div>
+    <div class="modal-actions">
+      <button type="button" id="addPlayerNewToggle">New player</button>
+      <button type="button" id="addPlayerSave" class="primary" hidden>Add</button>
+      <button type="button" id="addPlayerCancel">Cancel</button>
+    </div>
+  </div>
+</div>
+
 <!-- Match menu -->
 <div class="overlay" id="menuOverlay" role="dialog" aria-modal="true" aria-labelledby="menuTitle">
   <div class="modal" style="max-width:380px">
@@ -1360,6 +1385,10 @@
     }
     if ($('subOverlay').classList.contains('open')) {
       if (e.key === 'Escape') closeSub();
+      return;
+    }
+    if ($('addPlayerOverlay').classList.contains('open')) {
+      if (e.key === 'Escape') closeAddPlayer();
       return;
     }
     if ($('logOverlay').classList.contains('open')) {
@@ -5260,6 +5289,7 @@
 
   // ---------- Substitutions ----------
   let subFlow = { out: null, busy: false, mode: 'sub' };
+  const addFlow = { teamId: null, search: '', mode: 'pick', gender: null, busy: false, dupAck: false };
 
   function openSub(row) {
     if (state.role !== 'scorer' || !liveMatch || liveMatch.status !== 'live') return;
@@ -5531,6 +5561,9 @@
       closeMenu();
       setSound(!soundOn);
     });
+    if (state.role === 'scorer' && ['ready', 'live', 'halftime'].includes(liveMatch.status)) {
+      add('Add player', () => { closeMenu(); openAddPlayer(); });
+    }
     if (state.role === 'scorer' && ['live', 'halftime', 'shootout'].includes(liveMatch.status)) {
       add('Abandon match', () => {
         closeMenu();
@@ -5562,6 +5595,18 @@
   $('menuOverlay').addEventListener('click', (e) => { if (e.target === e.currentTarget) closeMenu(); });
   $('subCancel').addEventListener('click', closeSub);
   $('subOverlay').addEventListener('click', (e) => { if (e.target === e.currentTarget) closeSub(); });
+  $('addPlayerCancel').addEventListener('click', closeAddPlayer);
+  $('addPlayerOverlay').addEventListener('click', (e) => { if (e.target === e.currentTarget) closeAddPlayer(); });
+  $('addPlayerSearch').addEventListener('input', (e) => { addFlow.search = e.target.value; renderAddPlayerList(); });
+  $('addPlayerNewToggle').addEventListener('click', toggleAddPlayerMode);
+  $('addPlayerSave').addEventListener('click', saveNewAddPlayer);
+  $('addPlayerNewName').addEventListener('input', resetAddPlayerDuplicateWarning);
+  $('addPlayerNewGender').addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-gender]');
+    if (!btn) return;
+    addFlow.gender = btn.dataset.gender;
+    renderAddPlayer();
+  });
   $('subCaptain').addEventListener('click', () => setCaptain(subFlow.out));
   $('subKeeper').addEventListener('click', () => {
     // The button is only shown on a player who is not the keeper: give him the gloves.
@@ -5573,6 +5618,184 @@
     $('subKeeper').hidden = true;
     renderSubList();
   });
+
+  // ---------- Add player mid-match ----------
+  // The player joins the team for good and gets a bench row in this match.
+  // He comes on through the normal sub flow; he is never put straight on the pitch.
+  function openAddPlayer() {
+    if (state.role !== 'scorer' || !liveMatch) return;
+    addFlow.teamId = liveMatch.team_a_id;
+    addFlow.search = '';
+    addFlow.mode = 'pick';
+    addFlow.gender = null;
+    addFlow.busy = false;
+    addFlow.dupAck = false;
+    $('addPlayerMsg').textContent = '';
+    $('addPlayerSearch').value = '';
+    renderAddPlayer();
+    $('addPlayerOverlay').classList.add('open');
+  }
+
+  function closeAddPlayer() {
+    $('addPlayerOverlay').classList.remove('open');
+    addFlow.busy = false;
+  }
+
+  function renderAddPlayer() {
+    const seg = $('addPlayerTeam');
+    seg.replaceChildren();
+    for (const id of [liveMatch.team_a_id, liveMatch.team_b_id]) {
+      const team = teamById(id);
+      const btn = eventChoice(team ? team.name : 'Unknown team', () => {
+        addFlow.teamId = id;
+        renderAddPlayer();
+      });
+      btn.setAttribute('aria-pressed', String(addFlow.teamId === id));
+      btn.disabled = addFlow.busy;
+      seg.append(btn);
+    }
+
+    const picking = addFlow.mode === 'pick';
+    $('addPlayerSearch').hidden = !picking;
+    $('addPlayerList').hidden = !picking;
+    $('addPlayerNew').hidden = picking;
+    $('addPlayerSave').hidden = picking;
+    $('addPlayerNewToggle').textContent = picking ? 'New player' : 'Pick from library';
+    $('addPlayerNewToggle').disabled = addFlow.busy;
+    $('addPlayerSave').disabled = addFlow.busy;
+    for (const btn of $('addPlayerNewGender').children) {
+      btn.setAttribute('aria-pressed', String(btn.dataset.gender === addFlow.gender));
+    }
+    if (picking) renderAddPlayerList();
+  }
+
+  function renderAddPlayerList() {
+    const list = $('addPlayerList');
+    list.replaceChildren();
+    // Anyone with a match_players row in this match, on either team, is left out.
+    const inMatch = new Set(livePlayers.map((r) => r.player_id));
+    const term = addFlow.search.trim().toLowerCase();
+    const eligible = players
+      .filter((p) => !inMatch.has(p.id))
+      .filter((p) => !term || String(p.name).toLowerCase().includes(term))
+      .sort((a, b) => a.name.localeCompare(b.name));
+    for (const p of eligible) {
+      const row = eventPlayerRow(p, () => confirmAddPlayer(p));
+      row.disabled = addFlow.busy;
+      list.append(row);
+    }
+    if (!eligible.length) {
+      const empty = document.createElement('div');
+      empty.className = 'empty';
+      empty.textContent = term ? 'No match' : 'No players left to add';
+      list.append(empty);
+    }
+  }
+
+  function toggleAddPlayerMode() {
+    addFlow.mode = addFlow.mode === 'pick' ? 'new' : 'pick';
+    $('addPlayerMsg').textContent = '';
+    addFlow.gender = null;
+    addFlow.dupAck = false;
+    $('addPlayerSave').textContent = 'Add';
+    $('addPlayerNewName').value = '';
+    renderAddPlayer();
+    if (addFlow.mode === 'new') $('addPlayerNewName').focus();
+  }
+
+  function resetAddPlayerDuplicateWarning() {
+    if (!addFlow.dupAck) return;
+    addFlow.dupAck = false;
+    $('addPlayerSave').textContent = 'Add';
+    $('addPlayerMsg').textContent = '';
+  }
+
+  function confirmAddPlayer(p) {
+    if (addFlow.busy) return;
+    const team = teamById(addFlow.teamId);
+    showConfirm({
+      title: 'Add player?',
+      text: `${p.name} joins ${team ? team.name : 'this team'} and goes on the bench. Sub him on when you are ready.`,
+      okLabel: 'Add',
+      onConfirm: () => addPlayerToMatch(p)
+    });
+  }
+
+  // Squad membership, then a bench row in this match. Throws on failure.
+  async function writeAddPlayer(p) {
+    // 1. permanent squad membership
+    const { error: tpErr } = await getClient().from('team_players')
+      .upsert({ team_id: addFlow.teamId, player_id: p.id }, { onConflict: 'team_id,player_id' });
+    if (tpErr) throw tpErr;
+
+    // 2. bench row for this match
+    const { error: mpErr } = await getClient().from('match_players')
+      .insert({
+        match_id: liveMatch.id,
+        player_id: p.id,
+        team_id: addFlow.teamId,
+        on_pitch: false,
+        is_keeper: false,
+        is_captain: false
+      });
+    if (mpErr) throw mpErr;
+
+    await loadTeams();
+    await refreshLivePlayers();
+    closeAddPlayer();
+    setMatchStatus(`${p.name} added to the bench.`, false);
+  }
+
+  async function addPlayerToMatch(p) {
+    if (addFlow.busy) return;
+    addFlow.busy = true;
+    $('addPlayerMsg').textContent = '';
+    renderAddPlayer();
+    try {
+      await writeAddPlayer(p);
+    } catch (err) {
+      addFlow.busy = false;
+      renderAddPlayer();
+      $('addPlayerMsg').textContent = describeError(err);
+      console.error('Pitchside add player failed:', err);
+    }
+  }
+
+  async function saveNewAddPlayer() {
+    if (addFlow.busy) return;
+    const name = $('addPlayerNewName').value.trim();
+    const gender = addFlow.gender;
+    if (!name || !gender) return;
+
+    if (!addFlow.dupAck) {
+      const lower = name.toLowerCase();
+      const dup = players.find((p) => String(p.name).trim().toLowerCase() === lower);
+      if (dup) {
+        addFlow.dupAck = true;
+        $('addPlayerMsg').textContent = `Someone called "${name}" already exists. Add anyway?`;
+        $('addPlayerSave').textContent = 'Add anyway';
+        return;
+      }
+    }
+
+    addFlow.busy = true;
+    $('addPlayerMsg').textContent = '';
+    renderAddPlayer();
+    try {
+      const { data: p, error } = await getClient().from('players')
+        .insert({ name, gender })
+        .select('id, name, gender')
+        .single();
+      if (error) throw error;
+      await loadPlayers();
+      await writeAddPlayer(p);
+    } catch (err) {
+      addFlow.busy = false;
+      renderAddPlayer();
+      $('addPlayerMsg').textContent = describeError(err);
+      console.error('Pitchside add player failed:', err);
+    }
+  }
 
   // ---------- Match events ----------
   let liveEvents = [];
