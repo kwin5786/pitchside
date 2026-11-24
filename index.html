@@ -1298,7 +1298,8 @@
     renderPlayers();
     if (!isScorer) closeTeamPanel();
     // Viewers may stay on the tournament and summary screens; every other screen is scorer-only.
-    if (!isScorer && currentScreen !== 'launch' && currentScreen !== 'tournament' && currentScreen !== 'summary') showScreen('launch');
+    if (!isScorer && currentScreen !== 'launch' && currentScreen !== 'tournament' && currentScreen !== 'summary' && currentScreen !== 'match') showScreen('launch');
+    if (currentScreen === 'match' && liveMatch) renderMatch();
     if (currentScreen === 'summary' && liveMatch) renderSummary();
     renderTeams();
     if (!isScorer) closeTournamentForm();
@@ -2785,6 +2786,8 @@
         if (m.status === 'setup') openLineup(m);
         else if (['ready', 'live', 'halftime', 'shootout'].includes(m.status)) openMatch(m);
       });
+    } else if (['live', 'halftime', 'shootout'].includes(m.status)) {
+      btn.addEventListener('click', () => openMatch(m));
     } else {
       btn.disabled = true;
     }
@@ -4915,6 +4918,7 @@
   }
 
   async function updateMatchPlayer(playerId, fields) {
+    if (state.role !== 'scorer') throw new Error('Only the scorer can change a match.');
     const { error } = await getClient()
       .from('match_players')
       .update(fields)
@@ -4974,6 +4978,7 @@
       s.punished = sideOf(s.teamId).filter((r) => r.sent_off || binSecsLeft(r) !== null);
     }
     const canSub = state.role === 'scorer' && m.status === 'live';
+    const isScorer = state.role === 'scorer';
 
     const warnings = [];
     sides.forEach((s, i) => {
@@ -5082,7 +5087,7 @@
       }
 
       s.eventEl.replaceChildren();
-      if (m.status === 'live') {
+      if (m.status === 'live' && isScorer) {
         // Mirrored so each team's Goal button sits at the outer edge nearest its half.
         const buttons = s.right ? [...EVENT_BUTTONS].reverse() : EVENT_BUTTONS;
         for (const [type, label, ico] of buttons) {
@@ -5136,8 +5141,8 @@
     }
     $('matchWarn').textContent = warnings.join(' · ');
     $('openLogBtn').hidden = !['live', 'halftime', 'shootout', 'finished', 'abandoned'].includes(m.status);
-    $('swapSidesBtn').hidden = !['ready', 'live', 'halftime'].includes(m.status);
-    $('barPauseBtn').hidden = m.status !== 'live';
+    $('swapSidesBtn').hidden = !isScorer || !['ready', 'live', 'halftime'].includes(m.status);
+    $('barPauseBtn').hidden = !isScorer || m.status !== 'live';
     $('barPauseBtn').textContent = m.is_running ? '❚❚' : '▶';
     $('barPauseBtn').setAttribute('aria-label', m.is_running ? 'Pause' : 'Resume');
     $('barPauseBtn').disabled = matchBusy;
@@ -5155,7 +5160,7 @@
       controls.append(btn);
       return btn;
     };
-    if (m.status === 'ready') {
+    if (m.status === 'ready' && isScorer) {
       const blockers = kickOffBlockers();
       const kickOffBtn = addControl('Kick off', kickOff, true);
       kickOffBtn.disabled = matchBusy || blockers.length > 0;
@@ -5171,14 +5176,14 @@
       } else if ($('matchStatus').textContent.startsWith('Cannot kick off yet')) {
         setMatchStatus('', false);
       }
-    } else if (m.status === 'live') {
+    } else if (m.status === 'live' && isScorer) {
       if (m.current_half === 3) addControl('End extra time', goFullTime, false);
       else if (m.current_half === 2) addControl('Full time', goFullTime, false);
       else addControl('Half time', goHalfTime, false);
-    } else if (m.status === 'halftime') {
+    } else if (m.status === 'halftime' && isScorer) {
       if (m.current_half === 2) addControl('Start extra time', startExtraTime, true);
       else addControl('Start second half', startSecondHalf, true);
-    } else if (m.status === 'shootout') {
+    } else if (m.status === 'shootout' && isScorer) {
       const so = shootoutState();
       if (so.decided) {
         addControl('End shootout', endShootout, true);
@@ -5199,7 +5204,7 @@
   }
 
   async function patchMatch(fields) {
-    if (!liveMatch || matchBusy) return;
+    if (!liveMatch || matchBusy || state.role !== 'scorer') return;
     matchBusy = true;
     renderMatch();
     try {
@@ -6296,6 +6301,7 @@
   }
 
   async function commitEvent() {
+    if (state.role !== 'scorer') return;
     if (eventFlow.busy) return;
     eventFlow.busy = true;
     const { type, team } = eventFlow;
@@ -6499,6 +6505,7 @@
   }
 
   async function deleteEvent(e) {
+    if (state.role !== 'scorer') return;
     try {
       const { error } = await getClient().from('match_events').delete().eq('id', e.id);
       if (error) throw error;
