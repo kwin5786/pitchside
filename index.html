@@ -4209,6 +4209,8 @@
   let liveMatch = null;          // the match row currently open
   let livePlayers = [];          // match_players rows joined to player objects
   let clockTimer = null;
+  let liveChannel = null;        // realtime subscription for the open match
+  let liveSyncTimer = null;      // debounce for refetches
   let wakeLock = null;           // screen wake lock sentinel, held while the clock timer runs
   let serverOffsetMs = 0;        // database now() minus device now()
 
@@ -4311,6 +4313,14 @@
     if (document.visibilityState === 'visible' && clockTimer !== null) setAwake(true);
   });
 
+  // A dropped socket must not leave a stale score: resubscribe and reconcile on return.
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible' && currentScreen === 'match' && liveMatch) {
+      subscribeLive();
+      scheduleLiveSync();
+    }
+  });
+
   function renderBreakClock() {
     const el = $('breakClock');
     // The pause before extra time (halftime with current_half 2) has no countdown.
@@ -4379,6 +4389,7 @@
     renderMatch();
     startClockTimer();
     showScreen('match');
+    subscribeLive();
   }
 
   // ---------- Match summary ----------
@@ -4904,6 +4915,68 @@
       svg.append(rect);
     }
     return svg;
+  }
+
+  // Re-reads the open match row. Same column list as openMatch().
+  async function refreshLiveMatch() {
+    if (!liveMatch) return;
+    const { data: row, error } = await getClient()
+      .from('matches')
+      .select('id, status, match_type, team_a_id, team_b_id, created_at, first_half_secs, break_secs, second_half_secs, current_half, half_started_at, paused_secs, is_running, team_a_side, extra_secs, kicked_off_at, tournament_id')
+      .eq('id', liveMatch.id)
+      .single();
+    if (error) throw error;
+    liveMatch = row;
+  }
+
+  // A realtime change is only a signal: re-read everything from the database.
+  async function syncLive() {
+    if (!liveMatch) return;
+    // Never overwrite the scorer's in-flight write; try again after it settles.
+    if (matchBusy) {
+      scheduleLiveSync();
+      return;
+    }
+    try {
+      await refreshLiveMatch();
+      await reloadLivePlayers();
+      await loadEvents();   // redraws the showing screen
+      startClockTimer();    // a status change decides whether the timer should run
+    } catch (err) {
+      setMatchStatus(describeError(err), true);
+      console.error('Pitchside live sync failed:', err);
+    }
+  }
+
+  // Debounced so a burst of changes causes one refetch.
+  function scheduleLiveSync() {
+    clearTimeout(liveSyncTimer);
+    liveSyncTimer = setTimeout(syncLive, 300);
+  }
+
+  function subscribeLive() {
+    if (!liveMatch) return;
+    unsubscribeLive();
+    const id = liveMatch.id;
+    liveChannel = getClient()
+      .channel(`match-${id}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'matches', filter: `id=eq.${id}` }, scheduleLiveSync)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'match_players', filter: `match_id=eq.${id}` }, scheduleLiveSync)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'match_events', filter: `match_id=eq.${id}` }, scheduleLiveSync)
+      .subscribe((status) => console.info(`Pitchside live channel match-${id}:`, status));
+  }
+
+  function unsubscribeLive() {
+    clearTimeout(liveSyncTimer);
+    liveSyncTimer = null;
+    if (liveChannel) {
+      try {
+        getClient().removeChannel(liveChannel);
+      } catch (err) {
+        console.error('Pitchside live channel teardown failed:', err);
+      }
+      liveChannel = null;
+    }
   }
 
   async function reloadLivePlayers() {
@@ -6740,6 +6813,7 @@
     if (name !== 'match') {
       stopClockTimer();
       stopSound();
+      unsubscribeLive();
     }
     if (name !== 'launch' && name !== 'tournament') stopLiveClocks();
     currentScreen = name;
